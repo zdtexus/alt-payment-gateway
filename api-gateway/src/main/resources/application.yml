@@ -1,0 +1,28 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: api-gateway
+  cloud:
+    gateway:
+      server:
+        webflux:
+          routes:
+            - id: payment-service
+              uri: ${PAYMENT_SERVICE_URL:http://localhost:8081}
+              predicates:
+                - Path=/api/v1/**
+            - id: payment-service-docs
+              uri: ${PAYMENT_SERVICE_URL:http://localhost:8081}
+              predicates:
+                - Path=/v3/api-docs/**,/swagger-ui/**,/swagger-ui.html
+
+management:
+  endpoint:
+    gateway:
+      access: read-only
+  endpoints:
+    web:
+      exposure:
+        include: health,gateway

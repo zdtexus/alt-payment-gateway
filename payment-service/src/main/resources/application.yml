@@ -1,0 +1,31 @@
+server:
+  port: 8081
+
+spring:
+  application:
+    name: payment-service
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/payments}
+    username: ${DB_USER:payments}
+    password: ${DB_PASSWORD:payments}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+  flyway:
+    enabled: true
+  mail:
+    host: ${MAIL_HOST:localhost}
+    port: ${MAIL_PORT:1025}
+
+notification:
+  email:
+    from: no-reply@alt-payment.local
+  sms:
+    provider: log
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
