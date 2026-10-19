@@ -22,6 +22,7 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.reactive.server.WebTestClient;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.containsInAnyOrder;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class GatewayForwardingTests {
@@ -83,6 +84,56 @@ class GatewayForwardingTests {
 			.isEqualTo(body);
 
 		upstream.takeRequest(5, TimeUnit.SECONDS);
+	}
+
+	@Test
+	void forwardsPostBodyAndQueryAndReturnsUpstreamHeaders() throws InterruptedException {
+		String requestBody = "{\"amount\":\"10.00\",\"currency\":\"EUR\",\"method\":\"CARD\"}";
+		upstream.enqueue(new MockResponse().setResponseCode(201)
+			.setHeader("Location", "/api/v1/payments/42")
+			.setHeader("Content-Type", MediaType.APPLICATION_JSON_VALUE)
+			.setBody("{\"id\":42}"));
+
+		client().post()
+			.uri("/api/v1/payments?source=web")
+			.header("X-API-Key", API_KEY)
+			.contentType(MediaType.APPLICATION_JSON)
+			.bodyValue(requestBody)
+			.exchange()
+			.expectStatus()
+			.isCreated()
+			.expectHeader()
+			.valueEquals("Location", "/api/v1/payments/42")
+			.expectBody(String.class)
+			.isEqualTo("{\"id\":42}");
+
+		RecordedRequest request = upstream.takeRequest(5, TimeUnit.SECONDS);
+		assertThat(request).isNotNull();
+		assertThat(request.getMethod()).isEqualTo("POST");
+		assertThat(request.getPath()).isEqualTo("/api/v1/payments?source=web");
+		assertThat(request.getHeader("Content-Type")).startsWith(MediaType.APPLICATION_JSON_VALUE);
+		assertThat(request.getBody().readUtf8()).isEqualTo(requestBody);
+	}
+
+	@Test
+	void doesNotForwardUnroutedPaths() throws InterruptedException {
+		int requestsBefore = upstream.getRequestCount();
+
+		client().get().uri("/api/v2/payments").exchange().expectStatus().isNotFound();
+
+		assertThat(upstream.getRequestCount()).isEqualTo(requestsBefore);
+	}
+
+	@Test
+	void listsBothRoutesInActuator() {
+		client().get()
+			.uri("/actuator/gateway/routes")
+			.exchange()
+			.expectStatus()
+			.isOk()
+			.expectBody()
+			.jsonPath("$[*].route_id")
+			.value(containsInAnyOrder("payment-service", "payment-service-docs"));
 	}
 
 	@Test
