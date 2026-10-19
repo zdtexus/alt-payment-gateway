@@ -6,8 +6,10 @@ import java.util.concurrent.TimeUnit;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.mockwebserver.RecordedRequest;
+import okhttp3.mockwebserver.SocketPolicy;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -79,6 +81,28 @@ class GatewayForwardingTests {
 			.contentType(MediaType.APPLICATION_JSON)
 			.expectBody(String.class)
 			.isEqualTo(body);
+
+		upstream.takeRequest(5, TimeUnit.SECONDS);
+	}
+
+	@Test
+	void returnsJson502WhenPaymentServiceDropsConnection() throws InterruptedException {
+		upstream.enqueue(new MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST));
+
+		client().get()
+			.uri("/api/v1/payments")
+			.header("X-API-Key", API_KEY)
+			.exchange()
+			.expectStatus()
+			.isEqualTo(502)
+			.expectHeader()
+			.contentType(MediaType.APPLICATION_JSON)
+			.expectBody()
+			.jsonPath("$.timestamp").isNotEmpty()
+			.jsonPath("$.status").isEqualTo(502)
+			.jsonPath("$.error").isEqualTo("BAD_GATEWAY")
+			.jsonPath("$.message").isEqualTo("Payment service returned an invalid response")
+			.jsonPath("$.path").isEqualTo("/api/v1/payments");
 
 		upstream.takeRequest(5, TimeUnit.SECONDS);
 	}
