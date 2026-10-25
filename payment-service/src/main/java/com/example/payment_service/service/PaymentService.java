@@ -3,6 +3,7 @@ package com.example.payment_service.service;
 import java.time.Instant;
 import java.util.UUID;
 
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -17,6 +18,7 @@ import com.example.payment_service.entity.Merchant;
 import com.example.payment_service.entity.Transaction;
 import com.example.payment_service.entity.TransactionStatus;
 import com.example.payment_service.error.PaymentNotFoundException;
+import com.example.payment_service.event.PaymentProcessedEvent;
 import com.example.payment_service.provider.PaymentProvider;
 import com.example.payment_service.provider.ProviderRequest;
 import com.example.payment_service.provider.ProviderResult;
@@ -34,11 +36,14 @@ public class PaymentService {
 
 	private final PaymentProvider paymentProvider;
 
+	private final ApplicationEventPublisher eventPublisher;
+
 	public PaymentService(TransactionRepository transactionRepository, PaymentRuleValidator ruleValidator,
-			PaymentProvider paymentProvider) {
+			PaymentProvider paymentProvider, ApplicationEventPublisher eventPublisher) {
 		this.transactionRepository = transactionRepository;
 		this.ruleValidator = ruleValidator;
 		this.paymentProvider = paymentProvider;
+		this.eventPublisher = eventPublisher;
 	}
 
 	@Transactional
@@ -63,6 +68,7 @@ public class PaymentService {
 			}
 		}
 		transaction.setProcessedAt(Instant.now());
+		eventPublisher.publishEvent(PaymentProcessedEvent.from(transaction));
 		return PaymentResponse.from(transaction);
 	}
 

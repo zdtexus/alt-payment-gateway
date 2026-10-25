@@ -9,6 +9,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.event.ApplicationEvents;
+import org.springframework.test.context.event.RecordApplicationEvents;
 
 import com.example.payment_service.TestcontainersConfiguration;
 import com.example.payment_service.dto.CreatePaymentRequest;
@@ -18,6 +20,7 @@ import com.example.payment_service.entity.PaymentMethod;
 import com.example.payment_service.entity.Transaction;
 import com.example.payment_service.entity.TransactionStatus;
 import com.example.payment_service.error.PaymentRuleViolationException;
+import com.example.payment_service.event.PaymentProcessedEvent;
 import com.example.payment_service.provider.PaymentProvider;
 import com.example.payment_service.provider.ProviderResult;
 import com.example.payment_service.repository.MerchantRepository;
@@ -30,6 +33,7 @@ import static org.mockito.BDDMockito.given;
 
 @SpringBootTest
 @Import(TestcontainersConfiguration.class)
+@RecordApplicationEvents
 class PaymentServiceIntegrationTests {
 
 	@Autowired
@@ -43,6 +47,9 @@ class PaymentServiceIntegrationTests {
 
 	@MockitoBean
 	private PaymentProvider paymentProvider;
+
+	@Autowired
+	private ApplicationEvents events;
 
 	@AfterEach
 	void deleteTransactions() {
@@ -62,6 +69,11 @@ class PaymentServiceIntegrationTests {
 		assertThat(stored.getCurrency()).isEqualTo("EUR");
 		assertThat(stored.getCreatedAt()).isNotNull();
 		assertThat(stored.getProcessedAt()).isNotNull();
+		assertThat(events.stream(PaymentProcessedEvent.class)).singleElement().satisfies((event) -> {
+			assertThat(event.paymentId()).isEqualTo(response.id());
+			assertThat(event.status()).isEqualTo(TransactionStatus.SUCCEEDED);
+			assertThat(event.merchantName()).isEqualTo("Demo Shop");
+		});
 	}
 
 	@Test
@@ -82,6 +94,7 @@ class PaymentServiceIntegrationTests {
 			.isThrownBy(() -> paymentService.process(demoMerchant(), request("600.00", PaymentMethod.BONUS)));
 
 		assertThat(transactionRepository.count()).isZero();
+		assertThat(events.stream(PaymentProcessedEvent.class)).isEmpty();
 	}
 
 	@Test
@@ -92,6 +105,7 @@ class PaymentServiceIntegrationTests {
 			.isThrownBy(() -> paymentService.process(demoMerchant(), request("49.90", PaymentMethod.CARD)));
 
 		assertThat(transactionRepository.count()).isZero();
+		assertThat(events.stream(PaymentProcessedEvent.class)).isEmpty();
 	}
 
 	private Merchant demoMerchant() {

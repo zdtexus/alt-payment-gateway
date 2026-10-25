@@ -11,6 +11,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
@@ -26,6 +27,7 @@ import com.example.payment_service.entity.Transaction;
 import com.example.payment_service.entity.TransactionStatus;
 import com.example.payment_service.error.PaymentNotFoundException;
 import com.example.payment_service.error.PaymentRuleViolationException;
+import com.example.payment_service.event.PaymentProcessedEvent;
 import com.example.payment_service.provider.PaymentProvider;
 import com.example.payment_service.provider.ProviderRequest;
 import com.example.payment_service.provider.ProviderResult;
@@ -58,8 +60,10 @@ class PaymentServiceTests {
 
 	private final PaymentProvider paymentProvider = mock();
 
+	private final ApplicationEventPublisher eventPublisher = mock();
+
 	private final PaymentService paymentService = new PaymentService(transactionRepository, ruleValidator,
-			paymentProvider);
+			paymentProvider, eventPublisher);
 
 	private final Merchant merchant = new Merchant();
 
@@ -114,6 +118,29 @@ class PaymentServiceTests {
 		assertThat(saved.getValue().getMerchant()).isSameAs(merchant);
 		verify(paymentProvider)
 			.process(new ProviderRequest(PAYMENT_ID, PaymentMethod.CARD, "EUR", new BigDecimal("49.90")));
+	}
+
+	@Test
+	void publishesProcessedEventWithMerchantContacts() {
+		merchant.setName("Demo Shop");
+		merchant.setEmail("shop@example.com");
+		merchant.setPhone("+380501234567");
+		given(paymentProvider.process(any())).willReturn(ProviderResult.declined("Insufficient funds"));
+
+		PaymentResponse response = paymentService.process(merchant, REQUEST);
+
+		verify(eventPublisher).publishEvent(new PaymentProcessedEvent(PAYMENT_ID, "Demo Shop", "shop@example.com",
+				"+380501234567", new BigDecimal("49.90"), "EUR", PaymentMethod.CARD, TransactionStatus.DECLINED,
+				"Insufficient funds", response.processedAt()));
+	}
+
+	@Test
+	void providerFailurePublishesNothing() {
+		given(paymentProvider.process(any())).willThrow(new IllegalStateException("Provider unreachable"));
+
+		assertThatExceptionOfType(IllegalStateException.class)
+			.isThrownBy(() -> paymentService.process(merchant, REQUEST));
+		verifyNoInteractions(eventPublisher);
 	}
 
 	@Test
@@ -174,7 +201,7 @@ class PaymentServiceTests {
 
 		assertThatExceptionOfType(PaymentRuleViolationException.class)
 			.isThrownBy(() -> paymentService.process(merchant, REQUEST));
-		verifyNoInteractions(transactionRepository, paymentProvider);
+		verifyNoInteractions(transactionRepository, paymentProvider, eventPublisher);
 	}
 
 	private static Transaction transaction() {
