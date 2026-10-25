@@ -4,12 +4,20 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.UUID;
 
+import io.swagger.v3.oas.annotations.media.Schema;
+
 import com.example.payment_service.entity.PaymentMethod;
 import com.example.payment_service.entity.Transaction;
 import com.example.payment_service.entity.TransactionStatus;
 
-public record PaymentResponse(UUID id, BigDecimal amount, String currency, PaymentMethod paymentMethod,
-		TransactionStatus status, String declineReason, Instant createdAt, Instant processedAt) {
+public record PaymentResponse(@Schema(example = "7f8e2a1c-4b3d-4e5f-9a6b-1c2d3e4f5a6b") UUID id,
+		@Schema(example = "49.90") BigDecimal amount, @Schema(example = "EUR") String currency,
+		@Schema(example = "CARD") PaymentMethod paymentMethod,
+		@Schema(description = "SUCCEEDED or DECLINED once processed", example = "SUCCEEDED") TransactionStatus status,
+		@Schema(description = "Set only when the payment was declined", example = "Insufficient funds",
+				nullable = true) String declineReason,
+		@Schema(example = "2026-01-15T10:30:00Z") Instant createdAt,
+		@Schema(example = "2026-01-15T10:30:00.300Z") Instant processedAt) {
 
 	public static PaymentResponse from(Transaction transaction) {
 		return new PaymentResponse(transaction.getId(), transaction.getAmount(), transaction.getCurrency(),

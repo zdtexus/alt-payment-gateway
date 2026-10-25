@@ -33,6 +33,9 @@ notification:
   sms:
     provider: ${SMS_PROVIDER:log}
 
+springdoc:
+  default-produces-media-type: application/json
+
 management:
   health:
     mail:

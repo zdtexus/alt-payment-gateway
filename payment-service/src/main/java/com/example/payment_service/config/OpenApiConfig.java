@@ -1,7 +1,10 @@
 package com.example.payment_service.config;
 
+import java.util.TreeSet;
+
 import io.swagger.v3.oas.models.Components;
 import io.swagger.v3.oas.models.OpenAPI;
+import io.swagger.v3.oas.models.info.Info;
 import io.swagger.v3.oas.models.security.SecurityRequirement;
 import io.swagger.v3.oas.models.security.SecurityScheme;
 import io.swagger.v3.oas.models.servers.Server;
@@ -12,6 +15,9 @@ import org.springframework.context.annotation.Configuration;
 
 import com.example.payment_service.auth.ApiKeyAuthFilter;
 import com.example.payment_service.auth.CurrentMerchant;
+import com.example.payment_service.entity.PaymentMethod;
+import com.example.payment_service.rules.PaymentMethodRule;
+import com.example.payment_service.rules.PaymentRules;
 
 @Configuration(proxyBeanMethods = false)
 public class OpenApiConfig {
@@ -28,9 +34,30 @@ public class OpenApiConfig {
 			.in(SecurityScheme.In.HEADER)
 			.name(ApiKeyAuthFilter.API_KEY_HEADER)
 			.description("Merchant API key, for example `demo-key-123` for the seeded demo merchant");
-		return new OpenAPI().addServersItem(new Server().url("/"))
+		Info info = new Info().title("Alt Payment Gateway API").version("v1").description("""
+				Payments API for merchants. Authenticate with the `X-API-Key` header \
+				(click **Authorize** and use `demo-key-123` for the demo merchant).
+
+				%s
+				Errors use one format: `timestamp`, `status`, `error`, `message`, `path`.
+				""".formatted(paymentRulesTable()));
+		return new OpenAPI().info(info)
+			.addServersItem(new Server().url("/"))
 			.components(new Components().addSecuritySchemes(API_KEY_SCHEME, apiKey))
 			.addSecurityItem(new SecurityRequirement().addList(API_KEY_SCHEME));
+	}
+
+	static String paymentRulesTable() {
+		StringBuilder table = new StringBuilder("| Method | Currencies | Minimum | Maximum |\n|---|---|---|---|\n");
+		for (PaymentMethod method : PaymentMethod.values()) {
+			PaymentMethodRule rule = PaymentRules.forMethod(method);
+			table.append("| ").append(method)
+				.append(" | ").append(String.join(", ", new TreeSet<>(rule.currencies())))
+				.append(" | ").append(rule.minAmount().toPlainString())
+				.append(" | ").append(rule.maxAmount().toPlainString())
+				.append(" |\n");
+		}
+		return table.toString();
 	}
 
 }

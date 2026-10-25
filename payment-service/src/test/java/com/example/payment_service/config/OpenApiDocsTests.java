@@ -11,6 +11,8 @@ import org.springframework.test.web.servlet.MockMvc;
 import com.example.payment_service.TestcontainersConfiguration;
 
 import static org.hamcrest.Matchers.contains;
+import static org.hamcrest.Matchers.containsInAnyOrder;
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.empty;
 import static org.hamcrest.Matchers.everyItem;
 import static org.hamcrest.Matchers.hasItem;
@@ -42,6 +44,44 @@ class OpenApiDocsTests {
 		mvc.perform(get("/v3/api-docs").header("Host", "payment-service:8081"))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.servers[*].url", contains("/")));
+	}
+
+	@Test
+	void describesApiWithPaymentRulesTable() throws Exception {
+		mvc.perform(get("/v3/api-docs"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.info.title").value("Alt Payment Gateway API"))
+			.andExpect(jsonPath("$.info.description", containsString("demo-key-123")))
+			.andExpect(jsonPath("$.info.description", containsString("| BONUS | EUR | 0.01 | 500.00 |")))
+			.andExpect(jsonPath("$.info.description", containsString("| CARD | EUR, PLN, UAH, USD | 0.50 | 10000.00 |")));
+	}
+
+	@Test
+	void documentsCreatePaymentResponsesAndExamples() throws Exception {
+		String create = "$.paths['/api/v1/payments'].post";
+		mvc.perform(get("/v3/api-docs"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath(create + ".summary").value("Create a payment"))
+			.andExpect(jsonPath(create + ".responses.keys()", containsInAnyOrder("201", "400", "401", "403", "422")))
+			.andExpect(jsonPath(create + ".responses['201'].headers.Location").exists())
+			.andExpect(jsonPath(create + ".responses['201'].content['application/json'].schema['$ref']")
+				.value("#/components/schemas/PaymentResponse"))
+			.andExpect(jsonPath(create + ".responses['422'].content['application/json'].example.message")
+				.value("Amount 600.00 exceeds BONUS limit 500.00"))
+			.andExpect(jsonPath("$.components.schemas.CreatePaymentRequest.properties.currency.example").value("EUR"))
+			.andExpect(jsonPath("$.components.schemas.CreatePaymentRequest.properties.paymentMethod.example")
+				.value("CARD"));
+	}
+
+	@Test
+	void documentsReadEndpointsResponses() throws Exception {
+		mvc.perform(get("/v3/api-docs"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.paths['/api/v1/payments/{id}'].get.responses.keys()",
+					containsInAnyOrder("200", "400", "401", "403", "404")))
+			.andExpect(jsonPath("$.paths['/api/v1/payments'].get.responses.keys()",
+					containsInAnyOrder("200", "400", "401", "403")))
+			.andExpect(jsonPath("$.paths..content['*/*']").isEmpty());
 	}
 
 	@Test
