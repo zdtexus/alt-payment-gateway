@@ -1,15 +1,22 @@
 package com.example.payment_service.service;
 
 import java.time.Instant;
+import java.util.UUID;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.example.payment_service.dto.CreatePaymentRequest;
+import com.example.payment_service.dto.PageResponse;
 import com.example.payment_service.dto.PaymentResponse;
 import com.example.payment_service.entity.Merchant;
 import com.example.payment_service.entity.Transaction;
 import com.example.payment_service.entity.TransactionStatus;
+import com.example.payment_service.error.PaymentNotFoundException;
 import com.example.payment_service.provider.PaymentProvider;
 import com.example.payment_service.provider.ProviderRequest;
 import com.example.payment_service.provider.ProviderResult;
@@ -18,6 +25,8 @@ import com.example.payment_service.rules.PaymentRuleValidator;
 
 @Service
 public class PaymentService {
+
+	private static final Sort NEWEST_FIRST = Sort.by(Sort.Order.desc("createdAt"), Sort.Order.desc("id"));
 
 	private final TransactionRepository transactionRepository;
 
@@ -55,6 +64,22 @@ public class PaymentService {
 		}
 		transaction.setProcessedAt(Instant.now());
 		return PaymentResponse.from(transaction);
+	}
+
+	@Transactional(readOnly = true)
+	public PaymentResponse get(Merchant merchant, UUID id) {
+		return transactionRepository.findByIdAndMerchantId(id, merchant.getId())
+			.map(PaymentResponse::from)
+			.orElseThrow(() -> new PaymentNotFoundException(id));
+	}
+
+	@Transactional(readOnly = true)
+	public PageResponse<PaymentResponse> list(Merchant merchant, TransactionStatus status, int page, int size) {
+		Pageable pageable = PageRequest.of(page, size, NEWEST_FIRST);
+		Page<Transaction> transactions = (status != null)
+				? transactionRepository.findByMerchantIdAndStatus(merchant.getId(), status, pageable)
+				: transactionRepository.findByMerchantId(merchant.getId(), pageable);
+		return PageResponse.from(transactions, PaymentResponse::from);
 	}
 
 }

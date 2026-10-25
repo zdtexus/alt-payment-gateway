@@ -2,6 +2,8 @@ package com.example.payment_service.service;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -9,12 +11,20 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+
 import com.example.payment_service.dto.CreatePaymentRequest;
+import com.example.payment_service.dto.PageResponse;
 import com.example.payment_service.dto.PaymentResponse;
 import com.example.payment_service.entity.Merchant;
 import com.example.payment_service.entity.PaymentMethod;
 import com.example.payment_service.entity.Transaction;
 import com.example.payment_service.entity.TransactionStatus;
+import com.example.payment_service.error.PaymentNotFoundException;
 import com.example.payment_service.error.PaymentRuleViolationException;
 import com.example.payment_service.provider.PaymentProvider;
 import com.example.payment_service.provider.ProviderRequest;
@@ -25,15 +35,19 @@ import com.example.payment_service.rules.PaymentRuleValidator;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
 class PaymentServiceTests {
 
 	private static final UUID PAYMENT_ID = UUID.fromString("7f8e2a1c-4b3d-4e5f-9a6b-1c2d3e4f5a6b");
+
+	private static final UUID MERCHANT_ID = UUID.fromString("11111111-1111-1111-1111-111111111111");
 
 	private static final CreatePaymentRequest REQUEST = new CreatePaymentRequest(new BigDecimal("49.90"), "EUR",
 			PaymentMethod.CARD);
@@ -103,6 +117,57 @@ class PaymentServiceTests {
 	}
 
 	@Test
+	void getReturnsMerchantsOwnPayment() {
+		merchant.setId(MERCHANT_ID);
+		Transaction transaction = transaction();
+		given(transactionRepository.findByIdAndMerchantId(PAYMENT_ID, MERCHANT_ID))
+			.willReturn(Optional.of(transaction));
+
+		assertThat(paymentService.get(merchant, PAYMENT_ID).id()).isEqualTo(PAYMENT_ID);
+	}
+
+	@Test
+	void getThrowsWhenPaymentIsNotMerchantsOwn() {
+		merchant.setId(MERCHANT_ID);
+		given(transactionRepository.findByIdAndMerchantId(PAYMENT_ID, MERCHANT_ID)).willReturn(Optional.empty());
+
+		assertThatExceptionOfType(PaymentNotFoundException.class)
+			.isThrownBy(() -> paymentService.get(merchant, PAYMENT_ID))
+			.withMessage("Payment " + PAYMENT_ID + " not found");
+	}
+
+	@Test
+	void listWithoutStatusReturnsAllNewestFirst() {
+		merchant.setId(MERCHANT_ID);
+		given(transactionRepository.findByMerchantId(eq(MERCHANT_ID), any()))
+			.willReturn(new PageImpl<>(List.of(transaction()), PageRequest.of(1, 10), 11));
+
+		PageResponse<PaymentResponse> page = paymentService.list(merchant, null, 1, 10);
+
+		assertThat(page.content()).extracting(PaymentResponse::id).containsExactly(PAYMENT_ID);
+		assertThat(page.totalElements()).isEqualTo(11);
+		ArgumentCaptor<Pageable> pageable = ArgumentCaptor.forClass(Pageable.class);
+		verify(transactionRepository).findByMerchantId(eq(MERCHANT_ID), pageable.capture());
+		assertThat(pageable.getValue().getPageNumber()).isEqualTo(1);
+		assertThat(pageable.getValue().getPageSize()).isEqualTo(10);
+		assertThat(pageable.getValue().getSort())
+			.isEqualTo(Sort.by(Sort.Order.desc("createdAt"), Sort.Order.desc("id")));
+	}
+
+	@Test
+	void listWithStatusFiltersByStatus() {
+		merchant.setId(MERCHANT_ID);
+		given(transactionRepository.findByMerchantIdAndStatus(eq(MERCHANT_ID), eq(TransactionStatus.DECLINED), any()))
+			.willReturn(Page.empty());
+
+		paymentService.list(merchant, TransactionStatus.DECLINED, 0, 20);
+
+		verify(transactionRepository).findByMerchantIdAndStatus(eq(MERCHANT_ID), eq(TransactionStatus.DECLINED),
+				any());
+		verify(transactionRepository, never()).findByMerchantId(any(), any());
+	}
+
+	@Test
 	void ruleViolationStopsBeforeSavingOrCallingProvider() {
 		willThrow(new PaymentRuleViolationException("Amount 49.90 exceeds BONUS limit 500.00")).given(ruleValidator)
 			.validate(PaymentMethod.CARD, "EUR", new BigDecimal("49.90"));
@@ -110,6 +175,16 @@ class PaymentServiceTests {
 		assertThatExceptionOfType(PaymentRuleViolationException.class)
 			.isThrownBy(() -> paymentService.process(merchant, REQUEST));
 		verifyNoInteractions(transactionRepository, paymentProvider);
+	}
+
+	private static Transaction transaction() {
+		Transaction transaction = new Transaction();
+		transaction.setId(PAYMENT_ID);
+		transaction.setAmount(new BigDecimal("49.90"));
+		transaction.setCurrency("EUR");
+		transaction.setPaymentMethod(PaymentMethod.CARD);
+		transaction.setStatus(TransactionStatus.SUCCEEDED);
+		return transaction;
 	}
 
 }
