@@ -141,7 +141,7 @@ Services are configured through environment variables. Defaults are suitable for
 | `NOTIFICATION_SMS_HTTP_TIMEOUT` | payment-service | `5s` | SMS gateway connect and read timeout |
 | `PAYMENT_SERVICE_URL` | api-gateway | `http://localhost:8081` | Upstream payment service |
 
-With Docker Compose, only the database settings are read from `.env`. To change any other setting, add it under `payment-service.environment` in `docker-compose.yml`.
+With Docker Compose, put any of these in `.env` (see the commented examples in `.env.example`) and run `docker compose up -d` to apply them. Settings that are not set keep their defaults. `DB_URL`, `MAIL_HOST` and `MAIL_PORT` are fixed in `docker-compose.yml` to point at the containers.
 
 The service refuses to start with invalid settings, for example a success rate outside `0.0`–`1.0`, an unknown SMS provider, or `SMS_PROVIDER=http` without a URL.
 

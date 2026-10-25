@@ -22,6 +22,9 @@ services:
 
   payment-service:
     build: ./payment-service
+    env_file:
+      - path: .env
+        required: false
     environment:
       DB_URL: jdbc:postgresql://postgres:5432/${DB_NAME:-payments}
       DB_USER: ${DB_USER:-payments}
