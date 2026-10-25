@@ -47,6 +47,22 @@ class ApiKeyAuthFilterTests {
 	}
 
 	@Test
+	void controllerReceivesAuthenticatedMerchant() throws Exception {
+		given(merchantRepository.findByApiKey("active-key")).willReturn(Optional.of(merchant(MerchantStatus.ACTIVE)));
+
+		mvc.perform(get("/api/v1/merchant").header("X-API-Key", "active-key"))
+			.andExpect(status().isOk())
+			.andExpect(content().string("Test Shop"));
+	}
+
+	@Test
+	void currentMerchantWithoutAuthenticationReturns401() throws Exception {
+		mvc.perform(get("/actuator/merchant"))
+			.andExpect(status().isUnauthorized())
+			.andExpect(jsonPath("$.error").value("INVALID_API_KEY"));
+	}
+
+	@Test
 	void missingKeyReturns401() throws Exception {
 		expectError(mvc.perform(get("/api/v1/test")), 401, "INVALID_API_KEY", "Missing or unknown API key");
 		verifyNoInteractions(merchantRepository);
@@ -115,6 +131,11 @@ class ApiKeyAuthFilterTests {
 				"/swagger-ui/index.html", "/swagger-ui.html", "/api/v1/actuator/health", "/actuator-admin" })
 		String ok() {
 			return "ok";
+		}
+
+		@GetMapping({ "/api/v1/merchant", "/actuator/merchant" })
+		String merchantName(@CurrentMerchant Merchant merchant) {
+			return merchant.getName();
 		}
 
 	}

@@ -29,6 +29,8 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
 
 	static final String API_KEY_HEADER = "X-API-Key";
 
+	static final String MERCHANT_ATTRIBUTE = ApiKeyAuthFilter.class.getName() + ".merchant";
+
 	private static final List<PathPattern> PUBLIC_PATHS = Stream
 		.of("/actuator/**", "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html")
 		.map(PathPatternParser.defaultInstance::parse)
@@ -53,13 +55,15 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
 	@Override
 	protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
 			throws ServletException, IOException {
+		Merchant merchant;
 		try {
-			authenticate(request);
+			merchant = authenticate(request);
 		}
 		catch (InvalidApiKeyException | MerchantSuspendedException ex) {
 			exceptionResolver.resolveException(request, response, null, ex);
 			return;
 		}
+		request.setAttribute(MERCHANT_ATTRIBUTE, merchant);
 		chain.doFilter(request, response);
 	}
 
