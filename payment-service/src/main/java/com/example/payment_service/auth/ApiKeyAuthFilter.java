@@ -7,9 +7,11 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import org.springframework.web.filter.OncePerRequestFilter;
+import org.springframework.web.servlet.HandlerExceptionResolver;
 
 import com.example.payment_service.entity.Merchant;
 import com.example.payment_service.entity.MerchantStatus;
@@ -24,14 +26,24 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
 
 	private final MerchantRepository merchantRepository;
 
-	public ApiKeyAuthFilter(MerchantRepository merchantRepository) {
+	private final HandlerExceptionResolver exceptionResolver;
+
+	public ApiKeyAuthFilter(MerchantRepository merchantRepository,
+			@Qualifier("handlerExceptionResolver") HandlerExceptionResolver exceptionResolver) {
 		this.merchantRepository = merchantRepository;
+		this.exceptionResolver = exceptionResolver;
 	}
 
 	@Override
 	protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
 			throws ServletException, IOException {
-		authenticate(request);
+		try {
+			authenticate(request);
+		}
+		catch (InvalidApiKeyException | MerchantSuspendedException ex) {
+			exceptionResolver.resolveException(request, response, null, ex);
+			return;
+		}
 		chain.doFilter(request, response);
 	}
 

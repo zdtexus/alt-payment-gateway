@@ -7,22 +7,22 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.example.payment_service.entity.Merchant;
 import com.example.payment_service.entity.MerchantStatus;
-import com.example.payment_service.error.InvalidApiKeyException;
-import com.example.payment_service.error.MerchantSuspendedException;
 import com.example.payment_service.repository.MerchantRepository;
 
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @WebMvcTest(ApiKeyAuthFilterTests.TestController.class)
@@ -45,33 +45,44 @@ class ApiKeyAuthFilterTests {
 	}
 
 	@Test
-	void missingKeyIsRejected() {
-		assertThatThrownBy(() -> mvc.perform(get("/api/v1/test"))).isInstanceOf(InvalidApiKeyException.class);
+	void missingKeyReturns401() throws Exception {
+		expectError(mvc.perform(get("/api/v1/test")), 401, "INVALID_API_KEY", "Missing or unknown API key");
 		verifyNoInteractions(merchantRepository);
 	}
 
 	@Test
-	void blankKeyIsRejected() {
-		assertThatThrownBy(() -> mvc.perform(get("/api/v1/test").header("X-API-Key", " ")))
-			.isInstanceOf(InvalidApiKeyException.class);
+	void blankKeyReturns401() throws Exception {
+		expectError(mvc.perform(get("/api/v1/test").header("X-API-Key", " ")), 401, "INVALID_API_KEY",
+				"Missing or unknown API key");
 		verifyNoInteractions(merchantRepository);
 	}
 
 	@Test
-	void unknownKeyIsRejected() {
+	void unknownKeyReturns401() throws Exception {
 		given(merchantRepository.findByApiKey("unknown-key")).willReturn(Optional.empty());
 
-		assertThatThrownBy(() -> mvc.perform(get("/api/v1/test").header("X-API-Key", "unknown-key")))
-			.isInstanceOf(InvalidApiKeyException.class);
+		expectError(mvc.perform(get("/api/v1/test").header("X-API-Key", "unknown-key")), 401, "INVALID_API_KEY",
+				"Missing or unknown API key");
 	}
 
 	@Test
-	void suspendedMerchantIsRejected() {
+	void suspendedMerchantReturns403() throws Exception {
 		given(merchantRepository.findByApiKey("suspended-key"))
 			.willReturn(Optional.of(merchant(MerchantStatus.SUSPENDED)));
 
-		assertThatThrownBy(() -> mvc.perform(get("/api/v1/test").header("X-API-Key", "suspended-key")))
-			.isInstanceOf(MerchantSuspendedException.class);
+		expectError(mvc.perform(get("/api/v1/test").header("X-API-Key", "suspended-key")), 403,
+				"MERCHANT_SUSPENDED", "Merchant account is suspended");
+	}
+
+	private static void expectError(ResultActions result, int status, String error, String message)
+			throws Exception {
+		result.andExpect(status().is(status))
+			.andExpect(content().contentType(MediaType.APPLICATION_JSON))
+			.andExpect(jsonPath("$.timestamp").isNotEmpty())
+			.andExpect(jsonPath("$.status").value(status))
+			.andExpect(jsonPath("$.error").value(error))
+			.andExpect(jsonPath("$.message").value(message))
+			.andExpect(jsonPath("$.path").value("/api/v1/test"));
 	}
 
 	private static Merchant merchant(MerchantStatus status) {
