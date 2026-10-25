@@ -9,12 +9,17 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.mail.MailSendException;
+import org.springframework.mail.javamail.JavaMailSenderImpl;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 import com.example.payment_service.TestcontainersConfiguration;
 import com.example.payment_service.dto.CreatePaymentRequest;
 import com.example.payment_service.dto.PaymentResponse;
+import com.example.payment_service.entity.Merchant;
 import com.example.payment_service.entity.PaymentMethod;
+import com.example.payment_service.entity.Transaction;
+import com.example.payment_service.entity.TransactionStatus;
 import com.example.payment_service.notification.email.EmailSender;
 import com.example.payment_service.notification.sms.SmsSender;
 import com.example.payment_service.provider.PaymentProvider;
@@ -28,6 +33,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willAnswer;
+import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.verify;
 
@@ -43,6 +49,9 @@ class NotificationListenerIntegrationTests {
 
 	@Autowired
 	private TransactionRepository transactionRepository;
+
+	@Autowired
+	private JavaMailSenderImpl mailSender;
 
 	@MockitoBean
 	private PaymentProvider paymentProvider;
@@ -67,13 +76,38 @@ class NotificationListenerIntegrationTests {
 			return null;
 		}).given(emailSender).send(any(), any(), any());
 
-		PaymentResponse response = paymentService.process(merchantRepository.findByApiKey("demo-key-123").orElseThrow(),
-				new CreatePaymentRequest(new BigDecimal("49.90"), "EUR", PaymentMethod.CARD));
+		PaymentResponse response = paymentService.process(demoMerchant(), new CreatePaymentRequest(new BigDecimal("49.90"), "EUR", PaymentMethod.CARD));
 
 		verify(emailSender, timeout(5000)).send(eq("shop@demo.local"), eq("Payment " + response.id() + " succeeded"),
 				any());
 		verify(smsSender, timeout(5000)).send("+380501112233", "Payment 49.90 EUR succeeded");
 		assertThat(senderThread.get()).isNotEqualTo(Thread.currentThread().getName());
+	}
+
+	@Test
+	void failingMailServerDoesNotAffectPayment() {
+		given(paymentProvider.process(any())).willReturn(ProviderResult.approved());
+		willThrow(new MailSendException("Connection refused")).given(emailSender).send(any(), any(), any());
+
+		PaymentResponse response = paymentService.process(demoMerchant(),
+				new CreatePaymentRequest(new BigDecimal("49.90"), "EUR", PaymentMethod.CARD));
+
+		assertThat(response.status()).isEqualTo(TransactionStatus.SUCCEEDED);
+		verify(smsSender, timeout(5000)).send("+380501112233", "Payment 49.90 EUR succeeded");
+		assertThat(transactionRepository.findById(response.id())).get()
+			.extracting(Transaction::getStatus)
+			.isEqualTo(TransactionStatus.SUCCEEDED);
+	}
+
+	@Test
+	void mailServerCallsTimeOut() {
+		assertThat(mailSender.getJavaMailProperties()).containsEntry("mail.smtp.connectiontimeout", "5000")
+			.containsEntry("mail.smtp.timeout", "5000")
+			.containsEntry("mail.smtp.writetimeout", "5000");
+	}
+
+	private Merchant demoMerchant() {
+		return merchantRepository.findByApiKey("demo-key-123").orElseThrow();
 	}
 
 }

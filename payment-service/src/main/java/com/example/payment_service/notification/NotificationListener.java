@@ -1,5 +1,7 @@
 package com.example.payment_service.notification;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.event.TransactionPhase;
@@ -12,6 +14,8 @@ import com.example.payment_service.notification.sms.SmsSender;
 
 @Component
 public class NotificationListener {
+
+	private static final Logger log = LoggerFactory.getLogger(NotificationListener.class);
 
 	private final EmailSender emailSender;
 
@@ -26,10 +30,19 @@ public class NotificationListener {
 	@TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
 	public void onPaymentProcessed(PaymentProcessedEvent event) {
 		if (event.merchantEmail() != null) {
-			emailSender.send(event.merchantEmail(), subject(event), emailBody(event));
+			sendSafely("email", event, () -> emailSender.send(event.merchantEmail(), subject(event), emailBody(event)));
 		}
 		if (event.merchantPhone() != null) {
-			smsSender.send(event.merchantPhone(), smsText(event));
+			sendSafely("SMS", event, () -> smsSender.send(event.merchantPhone(), smsText(event)));
+		}
+	}
+
+	private static void sendSafely(String channel, PaymentProcessedEvent event, Runnable send) {
+		try {
+			send.run();
+		}
+		catch (RuntimeException ex) {
+			log.warn("Failed to send {} notification for payment {}", channel, event.paymentId(), ex);
 		}
 	}
 

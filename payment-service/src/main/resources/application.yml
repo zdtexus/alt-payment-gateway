@@ -17,6 +17,10 @@ spring:
   mail:
     host: ${MAIL_HOST:localhost}
     port: ${MAIL_PORT:1025}
+    properties:
+      "[mail.smtp.connectiontimeout]": ${MAIL_TIMEOUT_MS:5000}
+      "[mail.smtp.timeout]": ${MAIL_TIMEOUT_MS:5000}
+      "[mail.smtp.writetimeout]": ${MAIL_TIMEOUT_MS:5000}
 
 payment:
   provider:
@@ -30,6 +34,9 @@ notification:
     provider: ${SMS_PROVIDER:log}
 
 management:
+  health:
+    mail:
+      enabled: false
   endpoints:
     web:
       exposure:
