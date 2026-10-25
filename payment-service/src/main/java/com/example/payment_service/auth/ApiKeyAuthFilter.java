@@ -27,7 +27,7 @@ import com.example.payment_service.repository.MerchantRepository;
 @Component
 public class ApiKeyAuthFilter extends OncePerRequestFilter {
 
-	static final String API_KEY_HEADER = "X-API-Key";
+	public static final String API_KEY_HEADER = "X-API-Key";
 
 	static final String MERCHANT_ATTRIBUTE = ApiKeyAuthFilter.class.getName() + ".merchant";
 
