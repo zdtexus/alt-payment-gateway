@@ -44,6 +44,8 @@ PaymentService.process()                     @Transactional
               └── SmsSender
 ```
 
+The merchant receives an email receipt and an SMS for every processed payment, whether it succeeded or was declined. A channel is skipped when the merchant has no email address or phone number. A failed email or SMS is logged as a warning with the payment ID and does not stop the other channel. The mail server is not part of `/actuator/health`, so a mail outage does not mark the service as down.
+
 Email, SMS and the payment provider are defined as interfaces. Implementations are selected through configuration, so a real provider can replace the default one without changes to business code.
 
 ## Requirements
@@ -74,7 +76,7 @@ Maven does not need to be installed; each service includes the Maven Wrapper.
    docker compose up --build
    ```
 
-4. Open http://localhost:8080/swagger-ui.html to try the API.
+4. Open http://localhost:8080/swagger-ui.html, click **Authorize**, enter `demo-key-123`, and try any endpoint with **Try it out**.
 
 To stop, press `Ctrl+C` or run `docker compose down`.
 
@@ -116,6 +118,8 @@ A demo merchant is created on first start:
 |---|---|
 | Merchant ID | `11111111-1111-1111-1111-111111111111` |
 | API key | `demo-key-123` |
+| Email | `shop@demo.local` (receipts appear in the Mailpit inbox) |
+| Phone | `+380501112233` (SMS receipts appear in the `payment-service` log) |
 
 ## Configuration
 
@@ -128,9 +132,23 @@ Services are configured through environment variables. Defaults are suitable for
 | `DB_PASSWORD` | payment-service | `payments` | Database password |
 | `MAIL_HOST` | payment-service | `localhost` | SMTP host |
 | `MAIL_PORT` | payment-service | `1025` | SMTP port |
+| `MAIL_TIMEOUT_MS` | payment-service | `5000` | SMTP connect, read and write timeout in milliseconds |
+| `PAYMENT_PROVIDER_SUCCESS_RATE` | payment-service | `0.9` | Share of payments the simulated provider approves, from `0.0` to `1.0` |
+| `PAYMENT_PROVIDER_LATENCY` | payment-service | `300ms` | Simulated provider response time |
+| `SMS_PROVIDER` | payment-service | `log` | SMS implementation: `log` or `http` |
+| `NOTIFICATION_SMS_HTTP_URL` | payment-service | | SMS gateway endpoint, required when `SMS_PROVIDER=http` |
+| `NOTIFICATION_SMS_HTTP_API_KEY` | payment-service | | Sent as `Authorization: Bearer <key>` when set |
+| `NOTIFICATION_SMS_HTTP_TIMEOUT` | payment-service | `5s` | SMS gateway connect and read timeout |
 | `PAYMENT_SERVICE_URL` | api-gateway | `http://localhost:8081` | Upstream payment service |
 
-The SMS provider is selected with `notification.sms.provider`. The default, `log`, writes messages to the application log.
+With Docker Compose, only the database settings are read from `.env`. To change any other setting, add it under `payment-service.environment` in `docker-compose.yml`.
+
+The service refuses to start with invalid settings, for example a success rate outside `0.0`–`1.0`, an unknown SMS provider, or `SMS_PROVIDER=http` without a URL.
+
+### SMS providers
+
+- `log` (default) writes each message to the application log.
+- `http` sends `POST <NOTIFICATION_SMS_HTTP_URL>` with the JSON body `{"to": "+380501112233", "message": "Payment 49.90 EUR succeeded"}`. A `4xx` or `5xx` response, or a timeout, counts as a failed notification.
 
 ## API
 
@@ -151,7 +169,7 @@ curl -X POST http://localhost:8080/api/v1/payments \
   -d '{"amount": 49.90, "currency": "EUR", "paymentMethod": "CARD"}'
 ```
 
-A successful request returns `201 Created` with a `Location` header pointing to the new payment. A declined payment is a regular result and is returned with status `DECLINED`, not as an error.
+A successful request returns `201 Created` with a relative `Location` header, for example `/api/v1/payments/7f8e2a1c-4b3d-4e5f-9a6b-1c2d3e4f5a6b`. A declined payment is a regular result and is returned with status `DECLINED`, not as an error.
 
 The full API reference is available in Swagger UI.
 
@@ -182,11 +200,13 @@ Errors are returned in a common format:
 
 | Status | Error | Cause |
 |---|---|---|
-| 400 | `VALIDATION_FAILED` | Malformed request body or invalid field |
+| 400 | `VALIDATION_FAILED` | Malformed request body, invalid field, or invalid `id`, `status`, `page` or `size` |
 | 401 | `INVALID_API_KEY` | Missing or unknown API key |
 | 403 | `MERCHANT_SUSPENDED` | Merchant account is suspended |
 | 404 | `PAYMENT_NOT_FOUND` | Payment does not exist or belongs to another merchant |
 | 422 | `PAYMENT_RULE_VIOLATION` | Amount or currency not allowed for the payment method |
+| 502 | `BAD_GATEWAY` | Returned by the gateway when `payment-service` drops the connection |
+| 503 | `SERVICE_UNAVAILABLE` | Returned by the gateway when `payment-service` cannot be reached |
 
 ## Database
 
@@ -233,15 +253,18 @@ alt-payment-gateway/
 ├── api-gateway/          Spring Cloud Gateway
 ├── payment-service/
 │   └── src/main/java/com/example/payment_service/
-│       ├── config/
-│       ├── controller/
-│       ├── dto/
-│       ├── entity/
-│       ├── event/
-│       ├── exception/
-│       ├── notification/
-│       ├── repository/
-│       └── service/
+│       ├── auth/             API key filter and @CurrentMerchant
+│       ├── config/           Web, async and OpenAPI configuration
+│       ├── controller/       REST endpoints
+│       ├── dto/              Request and response bodies
+│       ├── entity/           JPA entities and enums
+│       ├── error/            Exceptions and the common error format
+│       ├── event/            PaymentProcessedEvent
+│       ├── notification/     Receipt listener, email and SMS senders
+│       ├── provider/         Payment provider interface and simulator
+│       ├── repository/       Spring Data repositories
+│       ├── rules/            Per-method currency and amount rules
+│       └── service/          Payment processing
 ├── docker-compose.yml
 ├── .env.example
 └── pom.xml               Aggregator for building both services
@@ -249,4 +272,4 @@ alt-payment-gateway/
 
 ## Tech Stack
 
-Java 25, Spring Boot 4, Spring Cloud Gateway, Spring Data JPA, Hibernate, Bean Validation, PostgreSQL, Flyway, springdoc-openapi, JUnit 5, Mockito, Testcontainers, Docker.
+Java 25, Spring Boot 4, Spring Cloud Gateway, Spring Data JPA, Hibernate, Bean Validation, Spring Mail, PostgreSQL, Flyway, springdoc-openapi, JUnit 5, Mockito, Testcontainers, Docker.
