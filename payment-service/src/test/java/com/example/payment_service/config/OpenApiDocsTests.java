@@ -38,6 +38,13 @@ class OpenApiDocsTests {
 	}
 
 	@Test
+	void usesRelativeServerUrlSoSwaggerCallsTheHostItWasLoadedFrom() throws Exception {
+		mvc.perform(get("/v3/api-docs").header("Host", "payment-service:8081"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.servers[*].url", contains("/")));
+	}
+
+	@Test
 	void hidesCurrentMerchantParameter() throws Exception {
 		mvc.perform(get("/v3/api-docs"))
 			.andExpect(status().isOk())
