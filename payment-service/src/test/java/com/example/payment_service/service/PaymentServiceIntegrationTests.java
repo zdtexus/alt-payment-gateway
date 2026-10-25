@@ -13,6 +13,7 @@ import org.springframework.test.context.event.ApplicationEvents;
 import org.springframework.test.context.event.RecordApplicationEvents;
 
 import com.example.payment_service.TestcontainersConfiguration;
+import com.example.payment_service.auth.ApiKeyHasher;
 import com.example.payment_service.dto.CreatePaymentRequest;
 import com.example.payment_service.dto.PaymentResponse;
 import com.example.payment_service.entity.Merchant;
@@ -109,7 +110,7 @@ class PaymentServiceIntegrationTests {
 	}
 
 	private Merchant demoMerchant() {
-		return merchantRepository.findByApiKey("demo-key-123").orElseThrow();
+		return merchantRepository.findByApiKeyHash(ApiKeyHasher.hash("demo-key-123")).orElseThrow();
 	}
 
 	private static CreatePaymentRequest request(String amount, PaymentMethod method) {

@@ -212,8 +212,10 @@ Errors are returned in a common format:
 
 The schema is managed by Flyway. Migrations are located in `payment-service/src/main/resources/db/migration` and are applied automatically on startup. Hibernate validates the mapping against the schema but never modifies it.
 
+API keys are never stored. The database keeps only their SHA-256 hash (`api_key_hash`), and each request's `X-API-Key` is hashed and looked up by that hash. A database dump therefore doesn't reveal any merchant's key.
+
 ```text
-merchants      id, name, api_key, email, phone, status
+merchants      id, name, api_key_hash, email, phone, status
 transactions   id, merchant_id, amount, currency, payment_method, status,
                decline_reason, created_at, processed_at
 ```

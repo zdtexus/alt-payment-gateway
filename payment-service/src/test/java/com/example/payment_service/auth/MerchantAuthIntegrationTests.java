@@ -45,7 +45,7 @@ class MerchantAuthIntegrationTests {
 	void createSuspendedMerchant() {
 		Merchant merchant = new Merchant();
 		merchant.setName("Suspended Shop");
-		merchant.setApiKey(SUSPENDED_KEY);
+		merchant.setApiKeyHash(ApiKeyHasher.hash(SUSPENDED_KEY));
 		merchant.setStatus(MerchantStatus.SUSPENDED);
 		suspendedMerchant = merchantRepository.save(merchant);
 	}

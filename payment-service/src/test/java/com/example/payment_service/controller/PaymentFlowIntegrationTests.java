@@ -16,6 +16,7 @@ import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.ResultActions;
 
 import com.example.payment_service.TestcontainersConfiguration;
+import com.example.payment_service.auth.ApiKeyHasher;
 import com.example.payment_service.entity.Merchant;
 import com.example.payment_service.entity.MerchantStatus;
 import com.example.payment_service.notification.email.EmailSender;
@@ -71,7 +72,7 @@ class PaymentFlowIntegrationTests {
 	void createOtherMerchant() {
 		Merchant merchant = new Merchant();
 		merchant.setName("Other Shop");
-		merchant.setApiKey(OTHER_KEY);
+		merchant.setApiKeyHash(ApiKeyHasher.hash(OTHER_KEY));
 		merchant.setStatus(MerchantStatus.ACTIVE);
 		otherMerchant = merchantRepository.save(merchant);
 		given(paymentProvider.process(any())).willReturn(ProviderResult.approved());

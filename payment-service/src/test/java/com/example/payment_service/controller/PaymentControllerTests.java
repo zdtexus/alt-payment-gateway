@@ -17,6 +17,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
+import com.example.payment_service.auth.ApiKeyHasher;
 import com.example.payment_service.dto.CreatePaymentRequest;
 import com.example.payment_service.dto.PageResponse;
 import com.example.payment_service.dto.PaymentResponse;
@@ -69,7 +70,7 @@ class PaymentControllerTests {
 		merchant.setId(UUID.randomUUID());
 		merchant.setName("Test Shop");
 		merchant.setStatus(MerchantStatus.ACTIVE);
-		given(merchantRepository.findByApiKey(API_KEY)).willReturn(Optional.of(merchant));
+		given(merchantRepository.findByApiKeyHash(ApiKeyHasher.hash(API_KEY))).willReturn(Optional.of(merchant));
 	}
 
 	@Test

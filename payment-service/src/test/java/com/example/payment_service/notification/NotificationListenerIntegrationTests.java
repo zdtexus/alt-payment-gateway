@@ -17,6 +17,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import com.example.payment_service.TestcontainersConfiguration;
+import com.example.payment_service.auth.ApiKeyHasher;
 import com.example.payment_service.dto.CreatePaymentRequest;
 import com.example.payment_service.dto.PaymentResponse;
 import com.example.payment_service.entity.Merchant;
@@ -145,7 +146,7 @@ class NotificationListenerIntegrationTests {
 	}
 
 	private Merchant demoMerchant() {
-		return merchantRepository.findByApiKey("demo-key-123").orElseThrow();
+		return merchantRepository.findByApiKeyHash(ApiKeyHasher.hash("demo-key-123")).orElseThrow();
 	}
 
 }

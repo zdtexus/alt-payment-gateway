@@ -72,7 +72,8 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
 		if (!StringUtils.hasText(apiKey)) {
 			throw new InvalidApiKeyException();
 		}
-		Merchant merchant = merchantRepository.findByApiKey(apiKey).orElseThrow(InvalidApiKeyException::new);
+		Merchant merchant = merchantRepository.findByApiKeyHash(ApiKeyHasher.hash(apiKey))
+			.orElseThrow(InvalidApiKeyException::new);
 		if (merchant.getStatus() == MerchantStatus.SUSPENDED) {
 			throw new MerchantSuspendedException();
 		}

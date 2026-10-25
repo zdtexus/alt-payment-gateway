@@ -39,7 +39,8 @@ class ApiKeyAuthFilterTests {
 
 	@Test
 	void validKeyReachesController() throws Exception {
-		given(merchantRepository.findByApiKey("active-key")).willReturn(Optional.of(merchant(MerchantStatus.ACTIVE)));
+		given(merchantRepository.findByApiKeyHash(ApiKeyHasher.hash("active-key")))
+			.willReturn(Optional.of(merchant(MerchantStatus.ACTIVE)));
 
 		mvc.perform(get("/api/v1/test").header("X-API-Key", "active-key"))
 			.andExpect(status().isOk())
@@ -48,7 +49,8 @@ class ApiKeyAuthFilterTests {
 
 	@Test
 	void controllerReceivesAuthenticatedMerchant() throws Exception {
-		given(merchantRepository.findByApiKey("active-key")).willReturn(Optional.of(merchant(MerchantStatus.ACTIVE)));
+		given(merchantRepository.findByApiKeyHash(ApiKeyHasher.hash("active-key")))
+			.willReturn(Optional.of(merchant(MerchantStatus.ACTIVE)));
 
 		mvc.perform(get("/api/v1/merchant").header("X-API-Key", "active-key"))
 			.andExpect(status().isOk())
@@ -77,7 +79,8 @@ class ApiKeyAuthFilterTests {
 
 	@Test
 	void unknownKeyReturns401() throws Exception {
-		given(merchantRepository.findByApiKey("unknown-key")).willReturn(Optional.empty());
+		given(merchantRepository.findByApiKeyHash(ApiKeyHasher.hash("unknown-key")))
+			.willReturn(Optional.empty());
 
 		expectError(mvc.perform(get("/api/v1/test").header("X-API-Key", "unknown-key")), 401, "INVALID_API_KEY",
 				"Missing or unknown API key");
@@ -85,7 +88,7 @@ class ApiKeyAuthFilterTests {
 
 	@Test
 	void suspendedMerchantReturns403() throws Exception {
-		given(merchantRepository.findByApiKey("suspended-key"))
+		given(merchantRepository.findByApiKeyHash(ApiKeyHasher.hash("suspended-key")))
 			.willReturn(Optional.of(merchant(MerchantStatus.SUSPENDED)));
 
 		expectError(mvc.perform(get("/api/v1/test").header("X-API-Key", "suspended-key")), 403,

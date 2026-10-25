@@ -9,6 +9,6 @@ import com.example.payment_service.entity.Merchant;
 
 public interface MerchantRepository extends JpaRepository<Merchant, UUID> {
 
-	Optional<Merchant> findByApiKey(String apiKey);
+	Optional<Merchant> findByApiKeyHash(String apiKeyHash);
 
 }
