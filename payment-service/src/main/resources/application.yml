@@ -27,7 +27,7 @@ notification:
   email:
     from: no-reply@alt-payment.local
   sms:
-    provider: log
+    provider: ${SMS_PROVIDER:log}
 
 management:
   endpoints:
