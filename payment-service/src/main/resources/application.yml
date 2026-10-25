@@ -18,6 +18,11 @@ spring:
     host: ${MAIL_HOST:localhost}
     port: ${MAIL_PORT:1025}
 
+payment:
+  provider:
+    success-rate: ${PAYMENT_PROVIDER_SUCCESS_RATE:0.9}
+    latency: ${PAYMENT_PROVIDER_LATENCY:300ms}
+
 notification:
   email:
     from: no-reply@alt-payment.local
