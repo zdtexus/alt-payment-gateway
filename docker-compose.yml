@@ -33,6 +33,12 @@ services:
         condition: service_healthy
       mailpit:
         condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8081/actuator/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 10
 
   api-gateway:
     build: ./api-gateway
@@ -41,7 +47,8 @@ services:
     ports:
       - "8080:8080"
     depends_on:
-      - payment-service
+      payment-service:
+        condition: service_healthy
 
 volumes:
   pgdata:
