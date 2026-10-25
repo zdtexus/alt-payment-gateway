@@ -3,6 +3,8 @@ package com.example.payment_service.auth;
 import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
@@ -74,6 +76,20 @@ class ApiKeyAuthFilterTests {
 				"MERCHANT_SUSPENDED", "Merchant account is suspended");
 	}
 
+	@ParameterizedTest
+	@ValueSource(strings = { "/actuator", "/actuator/health", "/v3/api-docs", "/v3/api-docs/swagger-config",
+			"/swagger-ui/index.html", "/swagger-ui.html" })
+	void publicPathsDoNotRequireKey(String path) throws Exception {
+		mvc.perform(get(path)).andExpect(status().isOk()).andExpect(content().string("ok"));
+		verifyNoInteractions(merchantRepository);
+	}
+
+	@ParameterizedTest
+	@ValueSource(strings = { "/api/v1/actuator/health", "/actuator-admin" })
+	void similarPathsStillRequireKey(String path) throws Exception {
+		mvc.perform(get(path)).andExpect(status().isUnauthorized());
+	}
+
 	private static void expectError(ResultActions result, int status, String error, String message)
 			throws Exception {
 		result.andExpect(status().is(status))
@@ -95,7 +111,8 @@ class ApiKeyAuthFilterTests {
 	@RestController
 	static class TestController {
 
-		@GetMapping("/api/v1/test")
+		@GetMapping({ "/api/v1/test", "/actuator", "/actuator/health", "/v3/api-docs", "/v3/api-docs/swagger-config",
+				"/swagger-ui/index.html", "/swagger-ui.html", "/api/v1/actuator/health", "/actuator-admin" })
 		String ok() {
 			return "ok";
 		}
