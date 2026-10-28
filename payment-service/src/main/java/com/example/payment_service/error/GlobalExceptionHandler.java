@@ -72,6 +72,12 @@ public class GlobalExceptionHandler {
 		return error(HttpStatus.UNPROCESSABLE_CONTENT, "PAYMENT_RULE_VIOLATION", ex.getMessage(), request);
 	}
 
+	@ExceptionHandler(IdempotencyKeyReusedException.class)
+	ResponseEntity<ErrorResponse> handleIdempotencyKeyReused(IdempotencyKeyReusedException ex,
+			HttpServletRequest request) {
+		return error(HttpStatus.UNPROCESSABLE_CONTENT, "IDEMPOTENCY_KEY_REUSED", ex.getMessage(), request);
+	}
+
 	private static ResponseEntity<ErrorResponse> validationFailed(String message, HttpServletRequest request) {
 		return error(HttpStatus.BAD_REQUEST, "VALIDATION_FAILED", message, request);
 	}

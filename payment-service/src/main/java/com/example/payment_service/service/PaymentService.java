@@ -1,6 +1,8 @@
 package com.example.payment_service.service;
 
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.util.Optional;
 import java.util.UUID;
 
 import org.springframework.context.ApplicationEventPublisher;
@@ -17,6 +19,7 @@ import com.example.payment_service.dto.PaymentResponse;
 import com.example.payment_service.entity.Merchant;
 import com.example.payment_service.entity.Transaction;
 import com.example.payment_service.entity.TransactionStatus;
+import com.example.payment_service.error.IdempotencyKeyReusedException;
 import com.example.payment_service.error.PaymentNotFoundException;
 import com.example.payment_service.event.PaymentProcessedEvent;
 import com.example.payment_service.provider.PaymentProvider;
@@ -48,11 +51,31 @@ public class PaymentService {
 
 	@Transactional
 	public PaymentResponse process(Merchant merchant, CreatePaymentRequest request) {
+		return process(merchant, request, null).payment();
+	}
+
+	@Transactional
+	public PaymentOutcome process(Merchant merchant, CreatePaymentRequest request, String idempotencyKey) {
+		String requestHash = null;
+		if (idempotencyKey != null) {
+			requestHash = PaymentRequestHasher.hash(request);
+			Optional<Transaction> existing = transactionRepository
+				.findByMerchantIdAndIdempotencyKey(merchant.getId(), idempotencyKey);
+			if (existing.isPresent()) {
+				if (!existing.get().getRequestHash().equals(requestHash)) {
+					throw new IdempotencyKeyReusedException();
+				}
+				return new PaymentOutcome(PaymentResponse.from(existing.get()), true);
+			}
+		}
+
 		ruleValidator.validate(request.paymentMethod(), request.currency(), request.amount());
 
 		Transaction transaction = new Transaction();
 		transaction.setMerchant(merchant);
-		transaction.setAmount(request.amount());
+		transaction.setIdempotencyKey(idempotencyKey);
+		transaction.setRequestHash(requestHash);
+		transaction.setAmount(request.amount().setScale(2));
 		transaction.setCurrency(request.currency());
 		transaction.setPaymentMethod(request.paymentMethod());
 		transaction.setStatus(TransactionStatus.PENDING);
@@ -67,9 +90,9 @@ public class PaymentService {
 				transaction.setDeclineReason(reason);
 			}
 		}
-		transaction.setProcessedAt(Instant.now());
+		transaction.setProcessedAt(Instant.now().truncatedTo(ChronoUnit.MICROS));
 		eventPublisher.publishEvent(PaymentProcessedEvent.from(transaction));
-		return PaymentResponse.from(transaction);
+		return new PaymentOutcome(PaymentResponse.from(transaction), false);
 	}
 
 	@Transactional(readOnly = true)

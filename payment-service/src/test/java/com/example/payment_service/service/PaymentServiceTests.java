@@ -2,6 +2,7 @@ package com.example.payment_service.service;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -82,7 +83,7 @@ class PaymentServiceTests {
 	@Test
 	void approvedPaymentSucceeds() {
 		given(paymentProvider.process(any())).willReturn(ProviderResult.approved());
-		Instant before = Instant.now();
+		Instant before = Instant.now().truncatedTo(ChronoUnit.MICROS);
 
 		PaymentResponse response = paymentService.process(merchant, REQUEST);
 

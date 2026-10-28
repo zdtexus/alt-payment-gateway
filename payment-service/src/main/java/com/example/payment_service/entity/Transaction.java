@@ -2,6 +2,7 @@ package com.example.payment_service.entity;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.UUID;
 
 import org.hibernate.annotations.JdbcTypeCode;
@@ -72,7 +73,7 @@ public class Transaction {
 	@PrePersist
 	void onCreate() {
 		if (createdAt == null) {
-			createdAt = Instant.now();
+			createdAt = Instant.now().truncatedTo(ChronoUnit.MICROS);
 		}
 	}
 

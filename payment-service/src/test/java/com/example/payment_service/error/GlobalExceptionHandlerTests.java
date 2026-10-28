@@ -102,6 +102,14 @@ class GlobalExceptionHandlerTests {
 				"/test/payment-rule-violation");
 	}
 
+	@Test
+	void reusedIdempotencyKeyReturns422() throws Exception {
+		ResultActions result = mvc.perform(get("/test/idempotency-key-reused"));
+
+		expectError(result, 422, "IDEMPOTENCY_KEY_REUSED", "Idempotency key was already used with a different request",
+				"/test/idempotency-key-reused");
+	}
+
 	private static void expectError(ResultActions result, int status, String error, String message, String path)
 			throws Exception {
 		result.andExpect(status().is(status))
@@ -145,6 +153,11 @@ class GlobalExceptionHandlerTests {
 		@GetMapping("/test/payment-rule-violation")
 		void paymentRuleViolation() {
 			throw new PaymentRuleViolationException("Amount 600.00 exceeds BONUS limit 500.00");
+		}
+
+		@GetMapping("/test/idempotency-key-reused")
+		void idempotencyKeyReused() {
+			throw new IdempotencyKeyReusedException();
 		}
 
 	}
