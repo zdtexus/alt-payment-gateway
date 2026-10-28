@@ -13,6 +13,7 @@ import org.springdoc.core.utils.SpringDocUtils;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import com.example.payment_service.auth.AdminKeyAuthFilter;
 import com.example.payment_service.auth.ApiKeyAuthFilter;
 import com.example.payment_service.auth.CurrentMerchant;
 import com.example.payment_service.entity.PaymentMethod;
@@ -24,6 +25,8 @@ public class OpenApiConfig {
 
 	static final String API_KEY_SCHEME = "ApiKey";
 
+	public static final String ADMIN_KEY_SCHEME = "AdminKey";
+
 	static {
 		SpringDocUtils.getConfig().addAnnotationsToIgnore(CurrentMerchant.class);
 	}
@@ -34,16 +37,24 @@ public class OpenApiConfig {
 			.in(SecurityScheme.In.HEADER)
 			.name(ApiKeyAuthFilter.API_KEY_HEADER)
 			.description("Merchant API key, for example `demo-key-123` for the seeded demo merchant");
+		SecurityScheme adminKey = new SecurityScheme().type(SecurityScheme.Type.APIKEY)
+			.in(SecurityScheme.In.HEADER)
+			.name(AdminKeyAuthFilter.ADMIN_KEY_HEADER)
+			.description("Admin key from the `ADMIN_API_KEY` setting; only for `/admin/**` endpoints");
 		Info info = new Info().title("Alt Payment Gateway API").version("v1").description("""
 				Payments API for merchants. Authenticate with the `X-API-Key` header \
 				(click **Authorize** and use `demo-key-123` for the demo merchant).
+
+				Merchant administration endpoints under `/admin/v1` use the `X-Admin-Key` header instead. \
+				A merchant key never opens them, and the admin key never opens the payments API.
 
 				%s
 				Errors use one format: `timestamp`, `status`, `error`, `message`, `path`.
 				""".formatted(paymentRulesTable()));
 		return new OpenAPI().info(info)
 			.addServersItem(new Server().url("/"))
-			.components(new Components().addSecuritySchemes(API_KEY_SCHEME, apiKey))
+			.components(new Components().addSecuritySchemes(API_KEY_SCHEME, apiKey)
+				.addSecuritySchemes(ADMIN_KEY_SCHEME, adminKey))
 			.addSecurityItem(new SecurityRequirement().addList(API_KEY_SCHEME));
 	}
 

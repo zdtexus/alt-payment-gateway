@@ -16,6 +16,7 @@ import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.empty;
 import static org.hamcrest.Matchers.everyItem;
 import static org.hamcrest.Matchers.hasItem;
+import static org.hamcrest.Matchers.hasKey;
 import static org.hamcrest.Matchers.not;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -37,6 +38,51 @@ class OpenApiDocsTests {
 			.andExpect(jsonPath("$.components.securitySchemes.ApiKey.in").value("header"))
 			.andExpect(jsonPath("$.components.securitySchemes.ApiKey.name").value("X-API-Key"))
 			.andExpect(jsonPath("$.security[*].ApiKey", contains(empty())));
+	}
+
+	@Test
+	void adminEndpointsUseOnlyAdminKeyScheme() throws Exception {
+		mvc.perform(get("/v3/api-docs"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.components.securitySchemes.AdminKey.type").value("apiKey"))
+			.andExpect(jsonPath("$.components.securitySchemes.AdminKey.in").value("header"))
+			.andExpect(jsonPath("$.components.securitySchemes.AdminKey.name").value("X-Admin-Key"))
+			.andExpect(jsonPath("$.paths['/admin/v1/merchants'].post.security", contains(hasKey("AdminKey"))))
+			.andExpect(jsonPath("$.paths['/admin/v1/merchants/{id}'].patch.security", contains(hasKey("AdminKey"))))
+			.andExpect(jsonPath("$.paths['/admin/v1/merchants/{id}/api-key'].post.security",
+					contains(hasKey("AdminKey"))))
+			.andExpect(jsonPath("$.paths['/admin/v1/merchants'].post.security[*].ApiKey").isEmpty())
+			.andExpect(jsonPath("$.paths['/api/v1/payments'].post.security").doesNotExist())
+			.andExpect(jsonPath("$.info.description", containsString("X-Admin-Key")));
+	}
+
+	@Test
+	void documentsAdminEndpointsResponses() throws Exception {
+		String create = "$.paths['/admin/v1/merchants'].post";
+		String status = "$.paths['/admin/v1/merchants/{id}'].patch";
+		String rotate = "$.paths['/admin/v1/merchants/{id}/api-key'].post";
+		mvc.perform(get("/v3/api-docs"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath(create + ".tags", contains("Merchant administration")))
+			.andExpect(jsonPath(create + ".responses.keys()", containsInAnyOrder("201", "400", "401")))
+			.andExpect(jsonPath(create + ".responses['201'].headers['Cache-Control']").exists())
+			.andExpect(jsonPath(create + ".responses['201'].content['application/json'].schema['$ref']")
+				.value("#/components/schemas/CreatedMerchantResponse"))
+			.andExpect(jsonPath(create + ".responses['401'].content['application/json'].example.error")
+				.value("INVALID_ADMIN_KEY"))
+			.andExpect(jsonPath(status + ".responses.keys()", containsInAnyOrder("200", "400", "401", "404")))
+			.andExpect(jsonPath(status + ".responses['200'].content['application/json'].schema['$ref']")
+				.value("#/components/schemas/MerchantResponse"))
+			.andExpect(jsonPath(status + ".responses['404'].content['application/json'].example.error")
+				.value("MERCHANT_NOT_FOUND"))
+			.andExpect(jsonPath(rotate + ".responses.keys()", containsInAnyOrder("200", "400", "401", "404")))
+			.andExpect(jsonPath(rotate + ".responses['200'].headers['Cache-Control']").exists())
+			.andExpect(jsonPath(rotate + ".responses['200'].content['application/json'].schema['$ref']")
+				.value("#/components/schemas/ApiKeyResponse"))
+			.andExpect(jsonPath("$.components.schemas.UpdateMerchantStatusRequest.properties.status.enum",
+					containsInAnyOrder("ACTIVE", "SUSPENDED")))
+			.andExpect(jsonPath("$.components.schemas.CreateMerchantRequest.required", contains("name")))
+			.andExpect(jsonPath("$.components.schemas..apiKeyHash").isEmpty());
 	}
 
 	@Test

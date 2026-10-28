@@ -8,6 +8,7 @@ The system consists of an API gateway and a payment service, backed by PostgreSQ
 
 - Single entry point through Spring Cloud Gateway
 - API key authentication with strict per-merchant data isolation
+- Admin API to create merchants, suspend them and rotate their API keys
 - Safe retries with the `Idempotency-Key` header, so a retried payment is never charged twice
 - Multiple payment methods with per-method currency and amount rules
 - Simulated payment provider with configurable success rate and latency
@@ -154,7 +155,7 @@ The service refuses to start with invalid settings, for example a missing or sho
 
 ## API
 
-All requests require the `X-API-Key` header. A merchant can only access its own payments.
+All requests require the `X-API-Key` header. A merchant can only access its own payments. Merchants and their keys are managed through the [admin API](#merchant-administration).
 
 | Method | Path | Description |
 |---|---|---|
@@ -180,7 +181,11 @@ The full API reference is available in Swagger UI.
 A network error can leave the client unsure whether a payment was created. To retry safely, send an `Idempotency-Key` header with a value unique to the payment, for example the order ID:
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/payments   -H "X-API-Key: demo-key-123"   -H "Idempotency-Key: order-1001"   -H "Content-Type: application/json"   -d '{"amount": 49.90, "currency": "EUR", "paymentMethod": "CARD"}'
+curl -X POST http://localhost:8080/api/v1/payments \
+  -H "X-API-Key: demo-key-123" \
+  -H "Idempotency-Key: order-1001" \
+  -H "Content-Type: application/json" \
+  -d '{"amount": 49.90, "currency": "EUR", "paymentMethod": "CARD"}'
 ```
 
 - The first request processes the payment as usual.
@@ -189,6 +194,56 @@ curl -X POST http://localhost:8080/api/v1/payments   -H "X-API-Key: demo-key-123
 - Keys are scoped to the merchant and may be 1 to 255 characters long.
 - A request rejected with `400` or `422 PAYMENT_RULE_VIOLATION` stores nothing, so the key can be reused with a corrected body.
 - Requests without the header are processed every time.
+
+### Merchant administration
+
+Admin endpoints manage merchants and require the `X-Admin-Key` header with the value of `ADMIN_API_KEY`. The two keys are separate: a merchant key never opens `/admin/**`, and the admin key never opens `/api/**`.
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/admin/v1/merchants` | Create an `ACTIVE` merchant and return its API key |
+| `PATCH` | `/admin/v1/merchants/{id}` | Suspend or reactivate a merchant |
+| `POST` | `/admin/v1/merchants/{id}/api-key` | Replace the merchant's API key |
+
+Create a merchant. `name` is required; `email` and `phone` (E.164, for example `+380501234567`) are optional and receive payment receipts:
+
+```bash
+curl -X POST http://localhost:8080/admin/v1/merchants \
+  -H "X-Admin-Key: $ADMIN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Acme Store", "email": "billing@acme.example", "phone": "+380501234567"}'
+```
+
+```json
+{
+  "id": "3c9d6f1e-2a4b-4c8d-9e0f-1a2b3c4d5e6f",
+  "name": "Acme Store",
+  "email": "billing@acme.example",
+  "phone": "+380501234567",
+  "status": "ACTIVE",
+  "apiKey": "q3Zb8kV1xYwP0nR7sT2uL5mH9cJ4dF6gA1eB3iK8oQ0"
+}
+```
+
+The `apiKey` is shown only once: only its hash is stored, so it can't be retrieved later. Responses that contain a key are sent with `Cache-Control: no-store`.
+
+Suspend a merchant. Its key gets `403 MERCHANT_SUSPENDED` from the next request; send `"ACTIVE"` to reactivate it:
+
+```bash
+curl -X PATCH http://localhost:8080/admin/v1/merchants/3c9d6f1e-2a4b-4c8d-9e0f-1a2b3c4d5e6f \
+  -H "X-Admin-Key: $ADMIN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"status": "SUSPENDED"}'
+```
+
+Rotate a merchant's key, for example when it has leaked or been lost. The response contains the new key, and the old key gets `401` immediately. The merchant's status does not change:
+
+```bash
+curl -X POST http://localhost:8080/admin/v1/merchants/3c9d6f1e-2a4b-4c8d-9e0f-1a2b3c4d5e6f/api-key \
+  -H "X-Admin-Key: $ADMIN_API_KEY"
+```
+
+In Swagger UI, the admin endpoints are listed under **Merchant administration** and use the separate `AdminKey` scheme in **Authorize**.
 
 ### Payment methods
 
@@ -222,6 +277,7 @@ Errors are returned in a common format:
 | 401 | `INVALID_ADMIN_KEY` | Missing or wrong `X-Admin-Key` on an `/admin/**` path |
 | 403 | `MERCHANT_SUSPENDED` | Merchant account is suspended |
 | 404 | `PAYMENT_NOT_FOUND` | Payment does not exist or belongs to another merchant |
+| 404 | `MERCHANT_NOT_FOUND` | Admin endpoint called with an unknown merchant id |
 | 422 | `PAYMENT_RULE_VIOLATION` | Amount or currency not allowed for the payment method |
 | 422 | `IDEMPOTENCY_KEY_REUSED` | `Idempotency-Key` already used with a different request body |
 | 502 | `BAD_GATEWAY` | Returned by the gateway when `payment-service` drops the connection |
@@ -231,7 +287,7 @@ Errors are returned in a common format:
 
 The schema is managed by Flyway. Migrations are located in `payment-service/src/main/resources/db/migration` and are applied automatically on startup. Hibernate validates the mapping against the schema but never modifies it.
 
-API keys are never stored. The database keeps only their SHA-256 hash (`api_key_hash`), and each request's `X-API-Key` is hashed and looked up by that hash. A database dump therefore doesn't reveal any merchant's key.
+API keys are never stored. The database keeps only their SHA-256 hash (`api_key_hash`), and each request's `X-API-Key` is hashed and looked up by that hash. A database dump therefore doesn't reveal any merchant's key. New and rotated keys are 32 random bytes from `SecureRandom`, encoded as URL-safe Base64 (43 characters).
 
 ```text
 merchants      id, name, api_key_hash, email, phone, status
@@ -275,7 +331,7 @@ alt-payment-gateway/
 ├── api-gateway/          Spring Cloud Gateway
 ├── payment-service/
 │   └── src/main/java/com/example/payment_service/
-│       ├── auth/             API key filter and @CurrentMerchant
+│       ├── auth/             API key and admin key filters, key generation, @CurrentMerchant
 │       ├── config/           Web, async and OpenAPI configuration
 │       ├── controller/       REST endpoints
 │       ├── dto/              Request and response bodies
@@ -286,7 +342,7 @@ alt-payment-gateway/
 │       ├── provider/         Payment provider interface and simulator
 │       ├── repository/       Spring Data repositories
 │       ├── rules/            Per-method currency and amount rules
-│       └── service/          Payment processing
+│       └── service/          Payment processing and merchant administration
 ├── docker-compose.yml
 ├── .env.example
 └── pom.xml               Aggregator for building both services
