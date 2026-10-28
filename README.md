@@ -147,11 +147,13 @@ Services are configured through environment variables. Defaults are suitable for
 | `REDIS_HOST` | api-gateway | `localhost` | Redis host |
 | `REDIS_PORT` | api-gateway | `6379` | Redis port |
 | `RATE_LIMIT_REPLENISH_RATE` | api-gateway | `10` | Requests per second each API key (or client IP without a key) may make on `/api/v1/**` over time |
-| `RATE_LIMIT_BURST_CAPACITY` | api-gateway | `20` | Requests allowed at once before the per-second rate applies |
+| `RATE_LIMIT_BURST_CAPACITY` | api-gateway | `20` | Requests allowed at once before the per-second rate applies. At least `RATE_LIMIT_REPLENISH_RATE`. |
+| `RATE_LIMIT_IP_REPLENISH_RATE` | api-gateway | `20` | Requests per second one client IP may make on `/api/v1/**` across all API keys |
+| `RATE_LIMIT_IP_BURST_CAPACITY` | api-gateway | `40` | Requests one client IP may send at once. At least `RATE_LIMIT_IP_REPLENISH_RATE`. |
 
 With Docker Compose, put any of these in `.env` (see the commented examples in `.env.example`) and run `docker compose up -d` to apply them. Settings that are not set keep their defaults. `DB_URL`, `MAIL_HOST`, `MAIL_PORT`, `PAYMENT_SERVICE_URL`, `REDIS_HOST` and `REDIS_PORT` are fixed in `docker-compose.yml` to point at the containers.
 
-The service refuses to start with invalid settings, for example a missing or short `ADMIN_API_KEY`, a success rate outside `0.0`–`1.0`, an unknown SMS provider, or `SMS_PROVIDER=http` without a URL.
+The gateway refuses to start when a rate limit is below 1 or its burst capacity is smaller than its replenish rate. The service refuses to start with invalid settings, for example a missing or short `ADMIN_API_KEY`, a success rate outside `0.0`–`1.0`, an unknown SMS provider, or `SMS_PROVIDER=http` without a URL.
 
 ### SMS providers
 
@@ -253,6 +255,8 @@ In Swagger UI, the admin endpoints are listed under **Merchant administration** 
 ### Rate limiting
 
 The gateway limits `/api/v1/**` per API key with a token bucket stored in Redis. Each key may send `RATE_LIMIT_BURST_CAPACITY` requests at once (default 20), and the bucket refills at `RATE_LIMIT_REPLENISH_RATE` requests per second (default 10). Requests without an API key share a bucket per client IP. `/admin/**` and the API docs are not limited.
+
+A second, looser limit applies per client IP across all keys (`RATE_LIMIT_IP_BURST_CAPACITY`, default 40, refilled at `RATE_LIMIT_IP_REPLENISH_RATE`, default 20 per second). Without it, someone guessing keys could send a different key with every request and never be limited, because every unknown key starts with a full bucket. Only requests that pass their key's limit count against the IP limit, so a client retrying a key that is already limited doesn't use up the allowance of other merchants behind the same IP. The client IP is the address of the TCP connection; `X-Forwarded-For` is ignored because clients can set it freely.
 
 The bucket is identified by a SHA-256 hash of the API key, so Redis never holds a merchant's key. Responses include `X-RateLimit-Remaining`, `X-RateLimit-Burst-Capacity` and `X-RateLimit-Replenish-Rate`. A request over the limit is rejected before it reaches `payment-service`, with `429` in the common error format and a `Retry-After` header giving the seconds until a request is allowed again:
 

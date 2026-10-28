@@ -11,6 +11,8 @@ import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 
+import com.example.api_gateway.ratelimit.RateLimitProperties;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 @SpringBootTest
@@ -35,8 +37,14 @@ class RedisConnectionTests {
 	}
 
 	@Test
-	void redisRateLimiterIsAvailable() {
-		assertThat(context.getBeansOfType(RedisRateLimiter.class)).hasSize(1);
+	void apiKeyAndClientIpRateLimitersUseConfiguredDefaults() {
+		assertThat(context.getBeansOfType(RedisRateLimiter.class)).containsOnlyKeys("apiKeyRateLimiter",
+				"clientIpRateLimiter");
+		RateLimitProperties properties = context.getBean(RateLimitProperties.class);
+		assertThat(properties.apiKey()).isEqualTo(new RateLimitProperties.Limit(10, 20));
+		assertThat(properties.clientIp()).isEqualTo(new RateLimitProperties.Limit(20, 40));
+		assertThat(context.getBean("apiKeyRateLimiter", RedisRateLimiter.class).isIncludeHeaders()).isTrue();
+		assertThat(context.getBean("clientIpRateLimiter", RedisRateLimiter.class).isIncludeHeaders()).isFalse();
 	}
 
 }

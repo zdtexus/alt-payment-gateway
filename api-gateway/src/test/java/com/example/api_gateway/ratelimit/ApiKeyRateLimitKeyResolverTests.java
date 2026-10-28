@@ -69,6 +69,30 @@ class ApiKeyRateLimitKeyResolverTests {
 		assertThat(resolve(MockServerHttpRequest.get("/"))).isEqualTo("ip:unknown");
 	}
 
+	@Test
+	void clientIpResolverUsesOnlyTheRemoteAddressWhateverTheKey() {
+		ClientIpKeyResolver clientIpResolver = new ClientIpKeyResolver();
+
+		assertThat(clientIpResolver.resolve(MockServerWebExchange.from(MockServerHttpRequest.get("/")
+			.header("X-API-Key", "key-one")
+			.header("X-Forwarded-For", "192.0.2.99")
+			.remoteAddress(CLIENT))).block()).isEqualTo("client-ip:203.0.113.7");
+		assertThat(clientIpResolver.resolve(MockServerWebExchange.from(MockServerHttpRequest.get("/"))).block())
+			.isEqualTo("client-ip:unknown");
+	}
+
+	@Test
+	void clientIpResolverMarksTheExchangeAsCheckedAndApiKeyResolverDoesNot() {
+		MockServerWebExchange exchange = MockServerWebExchange
+			.from(MockServerHttpRequest.get("/").header("X-API-Key", "key-one").remoteAddress(CLIENT));
+
+		resolver.resolve(exchange).block();
+		assertThat(ClientIpKeyResolver.wasChecked(exchange)).isFalse();
+
+		new ClientIpKeyResolver().resolve(exchange).block();
+		assertThat(ClientIpKeyResolver.wasChecked(exchange)).isTrue();
+	}
+
 	private String resolve(MockServerHttpRequest.BaseBuilder<?> request) {
 		return resolver.resolve(MockServerWebExchange.from(request)).block();
 	}

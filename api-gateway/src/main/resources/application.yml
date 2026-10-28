@@ -23,10 +23,13 @@ spring:
                 - name: RequestRateLimiter
                   args:
                     key-resolver: "#{@apiKeyResolver}"
+                    rate-limiter: "#{@apiKeyRateLimiter}"
                     throw-on-limit: true
-                    redis-rate-limiter.replenish-rate: ${RATE_LIMIT_REPLENISH_RATE:10}
-                    redis-rate-limiter.burst-capacity: ${RATE_LIMIT_BURST_CAPACITY:20}
-                    redis-rate-limiter.requested-tokens: 1
+                - name: RequestRateLimiter
+                  args:
+                    key-resolver: "#{@clientIpKeyResolver}"
+                    rate-limiter: "#{@clientIpRateLimiter}"
+                    throw-on-limit: true
             - id: payment-service-admin
               uri: ${PAYMENT_SERVICE_URL:http://localhost:8081}
               predicates:
@@ -35,6 +38,14 @@ spring:
               uri: ${PAYMENT_SERVICE_URL:http://localhost:8081}
               predicates:
                 - Path=/v3/api-docs/**,/swagger-ui/**,/swagger-ui.html
+
+rate-limit:
+  api-key:
+    replenish-rate: ${RATE_LIMIT_REPLENISH_RATE:10}
+    burst-capacity: ${RATE_LIMIT_BURST_CAPACITY:20}
+  client-ip:
+    replenish-rate: ${RATE_LIMIT_IP_REPLENISH_RATE:20}
+    burst-capacity: ${RATE_LIMIT_IP_BURST_CAPACITY:40}
 
 management:
   health:

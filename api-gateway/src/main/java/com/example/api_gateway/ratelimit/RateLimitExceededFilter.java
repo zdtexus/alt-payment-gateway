@@ -1,5 +1,7 @@
 package com.example.api_gateway.ratelimit;
 
+import java.util.List;
+
 import reactor.core.publisher.Mono;
 
 import org.springframework.cloud.gateway.filter.GatewayFilterChain;
@@ -21,6 +23,15 @@ public class RateLimitExceededFilter implements GlobalFilter, Ordered {
 
 	private static final String REQUESTED_TOKENS_HEADER = "X-RateLimit-Requested-Tokens";
 
+	private static final List<String> RATE_LIMIT_HEADERS = List.of("X-RateLimit-Remaining", REPLENISH_RATE_HEADER,
+			REQUESTED_TOKENS_HEADER, "X-RateLimit-Burst-Capacity");
+
+	private final RateLimitProperties properties;
+
+	public RateLimitExceededFilter(RateLimitProperties properties) {
+		this.properties = properties;
+	}
+
 	@Override
 	public int getOrder() {
 		return 0;
@@ -30,7 +41,15 @@ public class RateLimitExceededFilter implements GlobalFilter, Ordered {
 	public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
 		return chain.filter(exchange).onErrorMap(RateLimitExceededFilter::isRateLimited, (ex) -> {
 			HttpHeaders headers = exchange.getResponse().getHeaders();
-			headers.set(HttpHeaders.RETRY_AFTER, String.valueOf(retryAfterSeconds(headers)));
+			long retryAfter;
+			if (ClientIpKeyResolver.wasChecked(exchange)) {
+				RATE_LIMIT_HEADERS.forEach(headers::remove);
+				retryAfter = secondsToRefill(1, properties.clientIp().replenishRate());
+			}
+			else {
+				retryAfter = retryAfterSeconds(headers);
+			}
+			headers.set(HttpHeaders.RETRY_AFTER, String.valueOf(retryAfter));
 			return new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, MESSAGE, ex);
 		});
 	}
@@ -40,8 +59,11 @@ public class RateLimitExceededFilter implements GlobalFilter, Ordered {
 	}
 
 	static long retryAfterSeconds(HttpHeaders headers) {
-		long replenishRate = parse(headers.getFirst(REPLENISH_RATE_HEADER), 0);
-		long requestedTokens = parse(headers.getFirst(REQUESTED_TOKENS_HEADER), 1);
+		return secondsToRefill(parse(headers.getFirst(REQUESTED_TOKENS_HEADER), 1),
+				parse(headers.getFirst(REPLENISH_RATE_HEADER), 0));
+	}
+
+	private static long secondsToRefill(long requestedTokens, long replenishRate) {
 		if (replenishRate <= 0) {
 			return 1;
 		}
