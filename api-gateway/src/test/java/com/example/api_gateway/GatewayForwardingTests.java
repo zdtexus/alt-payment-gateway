@@ -134,6 +134,28 @@ class GatewayForwardingTests {
 	}
 
 	@Test
+	void forwardsWebhookBodyBytesAndSignatureUnchanged() throws InterruptedException {
+		String requestBody = "{ \"status\" : \"APPROVED\",\n  \"reference\":\"acme_1\" }";
+		upstream.enqueue(new MockResponse().setResponseCode(204));
+
+		client().post()
+			.uri("/api/v1/providers/http/webhook")
+			.header("X-Webhook-Signature", "sha256=abc123")
+			.contentType(MediaType.APPLICATION_JSON)
+			.bodyValue(requestBody)
+			.exchange()
+			.expectStatus()
+			.isNoContent();
+
+		RecordedRequest request = upstream.takeRequest(5, TimeUnit.SECONDS);
+		assertThat(request).isNotNull();
+		assertThat(request.getPath()).isEqualTo("/api/v1/providers/http/webhook");
+		assertThat(request.getHeader("X-Webhook-Signature")).isEqualTo("sha256=abc123");
+		assertThat(request.getHeader("X-API-Key")).isNull();
+		assertThat(request.getBody().readUtf8()).isEqualTo(requestBody);
+	}
+
+	@Test
 	void doesNotForwardUnroutedPaths() throws InterruptedException {
 		int requestsBefore = upstream.getRequestCount();
 
@@ -151,7 +173,8 @@ class GatewayForwardingTests {
 			.isOk()
 			.expectBody()
 			.jsonPath("$[*].route_id")
-			.value(containsInAnyOrder("payment-service", "payment-service-admin", "payment-service-docs"));
+			.value(containsInAnyOrder("payment-service-webhooks", "payment-service", "payment-service-admin",
+					"payment-service-docs"));
 	}
 
 	@Test

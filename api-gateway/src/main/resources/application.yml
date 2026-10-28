@@ -17,6 +17,16 @@ spring:
       server:
         webflux:
           routes:
+            - id: payment-service-webhooks
+              uri: ${PAYMENT_SERVICE_URL:http://localhost:8081}
+              predicates:
+                - Path=/api/v1/providers/*/webhook
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    key-resolver: "#{@webhookIpKeyResolver}"
+                    rate-limiter: "#{@webhookRateLimiter}"
+                    throw-on-limit: true
             - id: payment-service
               uri: ${PAYMENT_SERVICE_URL:http://localhost:8081}
               predicates:
@@ -48,6 +58,9 @@ rate-limit:
   client-ip:
     replenish-rate: ${RATE_LIMIT_IP_REPLENISH_RATE:20}
     burst-capacity: ${RATE_LIMIT_IP_BURST_CAPACITY:40}
+  webhook:
+    replenish-rate: ${RATE_LIMIT_WEBHOOK_REPLENISH_RATE:50}
+    burst-capacity: ${RATE_LIMIT_WEBHOOK_BURST_CAPACITY:100}
 
 logging:
   level:

@@ -41,7 +41,11 @@ class RateLimitTests {
 
 	private static final int IP_BURST = 10;
 
+	private static final int WEBHOOK_BURST = 6;
+
 	private static final String PAYMENTS = "/api/v1/payments";
+
+	private static final String WEBHOOK = "/api/v1/providers/http/webhook";
 
 	private static MockWebServer upstream;
 
@@ -75,6 +79,8 @@ class RateLimitTests {
 		registry.add("RATE_LIMIT_BURST_CAPACITY", () -> BURST);
 		registry.add("RATE_LIMIT_IP_REPLENISH_RATE", () -> 1);
 		registry.add("RATE_LIMIT_IP_BURST_CAPACITY", () -> IP_BURST);
+		registry.add("RATE_LIMIT_WEBHOOK_REPLENISH_RATE", () -> 1);
+		registry.add("RATE_LIMIT_WEBHOOK_BURST_CAPACITY", () -> WEBHOOK_BURST);
 	}
 
 	@BeforeEach
@@ -163,6 +169,39 @@ class RateLimitTests {
 	}
 
 	@Test
+	void webhooksHaveTheirOwnPerIpLimitWithRetryAfter() {
+		Limited limited = sendUntilLimited(WEBHOOK, () -> null, WEBHOOK_BURST + 5);
+
+		assertAllowedAboutBurst(limited, WEBHOOK_BURST);
+		HttpHeaders headers = limited.response().getResponseHeaders();
+		assertThat(headers.getFirst("Retry-After")).isEqualTo("1");
+		assertThat(headers.get("X-RateLimit-Burst-Capacity")).containsExactly(String.valueOf(WEBHOOK_BURST));
+		assertThat(JsonPath.<String>read(limited.body(), "$.error")).isEqualTo("TOO_MANY_REQUESTS");
+		assertThat(JsonPath.<String>read(limited.body(), "$.path")).isEqualTo(WEBHOOK);
+	}
+
+	@Test
+	void webhooksAndMerchantsDoNotShareLimits() {
+		send(WEBHOOK, null, WEBHOOK_BURST + 3);
+		assertThat(statusOf(PAYMENTS, null)).isEqualTo(200);
+		assertThat(statusOf(PAYMENTS, "key-one")).isEqualTo(200);
+
+		redis.execute((connection) -> connection.serverCommands().flushAll()).blockLast(Duration.ofSeconds(5));
+		send(PAYMENTS, null, BURST + 3);
+		send(PAYMENTS, "guess-" + UUID.randomUUID(), IP_BURST + 3);
+		assertThat(send(WEBHOOK, null, WEBHOOK_BURST - 1)).containsOnly(200);
+	}
+
+	@Test
+	void webhookLimitIsStoredUnderItsOwnPrefix() {
+		send(WEBHOOK, null, 1);
+
+		List<String> keys = redis.keys("*").collectList().block(Duration.ofSeconds(5));
+		assertThat(keys).anyMatch((key) -> key.contains(".webhook-ip:"))
+			.noneMatch((key) -> key.contains(".client-ip:") || key.contains(".ip:"));
+	}
+
+	@Test
 	void adminAndDocsPathsAreNotLimited() {
 		assertThat(send("/admin/v1/merchants", "key-one", BURST + 3)).containsOnly(200);
 		assertThat(send("/v3/api-docs", "key-one", BURST + 3)).containsOnly(200);
@@ -179,9 +218,13 @@ class RateLimitTests {
 	}
 
 	private Limited sendUntilLimited(Supplier<String> apiKeys, int maxRequests) {
+		return sendUntilLimited(PAYMENTS, apiKeys, maxRequests);
+	}
+
+	private Limited sendUntilLimited(String path, Supplier<String> apiKeys, int maxRequests) {
 		int allowed = 0;
 		for (int i = 0; i < maxRequests; i++) {
-			EntityExchangeResult<byte[]> result = request(PAYMENTS, apiKeys.get()).exchange()
+			EntityExchangeResult<byte[]> result = request(path, apiKeys.get()).exchange()
 				.expectBody()
 				.returnResult();
 			if (result.getStatus().value() == 429) {

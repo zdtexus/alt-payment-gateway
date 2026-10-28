@@ -37,14 +37,16 @@ class RedisConnectionTests {
 	}
 
 	@Test
-	void apiKeyAndClientIpRateLimitersUseConfiguredDefaults() {
+	void rateLimitersUseConfiguredDefaults() {
 		assertThat(context.getBeansOfType(RedisRateLimiter.class)).containsOnlyKeys("apiKeyRateLimiter",
-				"clientIpRateLimiter");
+				"clientIpRateLimiter", "webhookRateLimiter");
 		RateLimitProperties properties = context.getBean(RateLimitProperties.class);
 		assertThat(properties.apiKey()).isEqualTo(new RateLimitProperties.Limit(10, 20));
 		assertThat(properties.clientIp()).isEqualTo(new RateLimitProperties.Limit(20, 40));
+		assertThat(properties.webhook()).isEqualTo(new RateLimitProperties.Limit(50, 100));
 		assertThat(context.getBean("apiKeyRateLimiter", RedisRateLimiter.class).isIncludeHeaders()).isTrue();
 		assertThat(context.getBean("clientIpRateLimiter", RedisRateLimiter.class).isIncludeHeaders()).isFalse();
+		assertThat(context.getBean("webhookRateLimiter", RedisRateLimiter.class).isIncludeHeaders()).isTrue();
 	}
 
 }
