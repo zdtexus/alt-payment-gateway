@@ -75,6 +75,11 @@ public class GlobalExceptionHandler {
 		return error(HttpStatus.NOT_FOUND, "PAYMENT_NOT_FOUND", ex.getMessage(), request);
 	}
 
+	@ExceptionHandler(MerchantNotFoundException.class)
+	ResponseEntity<ErrorResponse> handleMerchantNotFound(MerchantNotFoundException ex, HttpServletRequest request) {
+		return error(HttpStatus.NOT_FOUND, "MERCHANT_NOT_FOUND", ex.getMessage(), request);
+	}
+
 	@ExceptionHandler(PaymentRuleViolationException.class)
 	ResponseEntity<ErrorResponse> handlePaymentRuleViolation(PaymentRuleViolationException ex,
 			HttpServletRequest request) {

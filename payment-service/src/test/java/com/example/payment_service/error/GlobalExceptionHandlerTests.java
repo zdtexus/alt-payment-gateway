@@ -107,6 +107,14 @@ class GlobalExceptionHandlerTests {
 	}
 
 	@Test
+	void unknownMerchantReturns404() throws Exception {
+		ResultActions result = mvc.perform(get("/test/merchants/" + PAYMENT_ID));
+
+		expectError(result, 404, "MERCHANT_NOT_FOUND", "Merchant " + PAYMENT_ID + " not found",
+				"/test/merchants/" + PAYMENT_ID);
+	}
+
+	@Test
 	void paymentRuleViolationReturns422() throws Exception {
 		ResultActions result = mvc.perform(get("/test/payment-rule-violation"));
 
@@ -155,6 +163,11 @@ class GlobalExceptionHandlerTests {
 		@GetMapping("/test/payments/{id}")
 		void get(@PathVariable UUID id) {
 			throw new PaymentNotFoundException(id);
+		}
+
+		@GetMapping("/test/merchants/{id}")
+		void getMerchant(@PathVariable UUID id) {
+			throw new MerchantNotFoundException(id);
 		}
 
 		@GetMapping("/test/invalid-api-key")

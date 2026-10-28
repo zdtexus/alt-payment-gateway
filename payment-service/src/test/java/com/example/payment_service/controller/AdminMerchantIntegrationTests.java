@@ -13,6 +13,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.ResultActions;
 
 import com.example.payment_service.TestcontainersConfiguration;
 import com.example.payment_service.auth.ApiKeyHasher;
@@ -22,6 +23,7 @@ import com.example.payment_service.repository.MerchantRepository;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -85,6 +87,47 @@ class AdminMerchantIntegrationTests {
 		String second = JsonPath.read(createMerchant("{\"name\": \"Acme Store\"}"), "$.apiKey");
 
 		assertThat(first).isNotEqualTo(second);
+	}
+
+	@Test
+	void suspendedMerchantIsBlockedAtOnceAndReactivatedMerchantWorksAgain() throws Exception {
+		String body = createMerchant("{\"name\": \"Acme Store\"}");
+		String id = JsonPath.read(body, "$.id");
+		String apiKey = JsonPath.read(body, "$.apiKey");
+
+		updateStatus(id, "SUSPENDED").andExpect(status().isOk())
+			.andExpect(jsonPath("$.id").value(id))
+			.andExpect(jsonPath("$.status").value("SUSPENDED"));
+		assertThat(merchantRepository.findById(UUID.fromString(id)).orElseThrow().getStatus())
+			.isEqualTo(MerchantStatus.SUSPENDED);
+		mvc.perform(get("/api/v1/payments").header("X-API-Key", apiKey))
+			.andExpect(status().isForbidden())
+			.andExpect(jsonPath("$.error").value("MERCHANT_SUSPENDED"));
+
+		updateStatus(id, "ACTIVE").andExpect(status().isOk()).andExpect(jsonPath("$.status").value("ACTIVE"));
+		mvc.perform(get("/api/v1/payments").header("X-API-Key", apiKey)).andExpect(status().isOk());
+	}
+
+	@Test
+	void settingTheSameStatusAgainIsAllowed() throws Exception {
+		String id = JsonPath.read(createMerchant("{\"name\": \"Acme Store\"}"), "$.id");
+
+		updateStatus(id, "ACTIVE").andExpect(status().isOk()).andExpect(jsonPath("$.status").value("ACTIVE"));
+	}
+
+	@Test
+	void updateStatusOfUnknownMerchantReturns404() throws Exception {
+		UUID unknownId = UUID.randomUUID();
+
+		updateStatus(unknownId.toString(), "SUSPENDED").andExpect(status().isNotFound())
+			.andExpect(jsonPath("$.error").value("MERCHANT_NOT_FOUND"))
+			.andExpect(jsonPath("$.message").value("Merchant " + unknownId + " not found"));
+	}
+
+	private ResultActions updateStatus(String id, String status) throws Exception {
+		return mvc.perform(patch("/admin/v1/merchants/" + id).header("X-Admin-Key", ADMIN_KEY)
+			.contentType(MediaType.APPLICATION_JSON)
+			.content("{\"status\": \"" + status + "\"}"));
 	}
 
 	private String createMerchant(String body) throws Exception {
