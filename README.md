@@ -254,7 +254,17 @@ In Swagger UI, the admin endpoints are listed under **Merchant administration** 
 
 The gateway limits `/api/v1/**` per API key with a token bucket stored in Redis. Each key may send `RATE_LIMIT_BURST_CAPACITY` requests at once (default 20), and the bucket refills at `RATE_LIMIT_REPLENISH_RATE` requests per second (default 10). Requests without an API key share a bucket per client IP. `/admin/**` and the API docs are not limited.
 
-The bucket is identified by a SHA-256 hash of the API key, so Redis never holds a merchant's key. Responses include `X-RateLimit-Remaining`, `X-RateLimit-Burst-Capacity` and `X-RateLimit-Replenish-Rate`. A request over the limit is rejected with `429 Too Many Requests` before it reaches `payment-service`.
+The bucket is identified by a SHA-256 hash of the API key, so Redis never holds a merchant's key. Responses include `X-RateLimit-Remaining`, `X-RateLimit-Burst-Capacity` and `X-RateLimit-Replenish-Rate`. A request over the limit is rejected before it reaches `payment-service`, with `429` in the common error format and a `Retry-After` header giving the seconds until a request is allowed again:
+
+```json
+{
+  "timestamp": "2026-01-15T10:30:00Z",
+  "status": 429,
+  "error": "TOO_MANY_REQUESTS",
+  "message": "Rate limit exceeded, retry later",
+  "path": "/api/v1/payments"
+}
+```
 
 ### Payment methods
 
@@ -291,6 +301,7 @@ Errors are returned in a common format:
 | 404 | `MERCHANT_NOT_FOUND` | Admin endpoint called with an unknown merchant id |
 | 422 | `PAYMENT_RULE_VIOLATION` | Amount or currency not allowed for the payment method |
 | 422 | `IDEMPOTENCY_KEY_REUSED` | `Idempotency-Key` already used with a different request body |
+| 429 | `TOO_MANY_REQUESTS` | Returned by the gateway when the API key or client IP is over the rate limit; see `Retry-After` |
 | 502 | `BAD_GATEWAY` | Returned by the gateway when `payment-service` drops the connection |
 | 503 | `SERVICE_UNAVAILABLE` | Returned by the gateway when `payment-service` cannot be reached |
 

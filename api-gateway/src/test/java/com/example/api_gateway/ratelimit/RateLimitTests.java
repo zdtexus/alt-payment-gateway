@@ -19,6 +19,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
+import org.springframework.http.MediaType;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.reactive.server.WebTestClient;
@@ -88,19 +89,46 @@ class RateLimitTests {
 	}
 
 	@Test
-	void limitedResponseCarriesRateLimitHeaders() {
+	void limitedResponseUsesCommonErrorFormatWithRetryAfter() {
 		send("/api/v1/payments", "key-one", BURST + 3);
+		int upstreamRequests = upstream.getRequestCount();
 
-		client().get()
+		client().post()
 			.uri("/api/v1/payments")
 			.header("X-API-Key", "key-one")
 			.exchange()
 			.expectStatus()
 			.isEqualTo(429)
 			.expectHeader()
+			.contentType(MediaType.APPLICATION_JSON)
+			.expectHeader()
+			.valueEquals("Retry-After", "1")
+			.expectHeader()
 			.valueEquals("X-RateLimit-Remaining", "0")
 			.expectHeader()
-			.valueEquals("X-RateLimit-Burst-Capacity", String.valueOf(BURST));
+			.valueEquals("X-RateLimit-Burst-Capacity", String.valueOf(BURST))
+			.expectBody()
+			.jsonPath("$.timestamp").isNotEmpty()
+			.jsonPath("$.status").isEqualTo(429)
+			.jsonPath("$.error").isEqualTo("TOO_MANY_REQUESTS")
+			.jsonPath("$.message").isEqualTo("Rate limit exceeded, retry later")
+			.jsonPath("$.path").isEqualTo("/api/v1/payments")
+			.jsonPath("$.requestId").doesNotExist();
+		assertThat(upstream.getRequestCount()).isEqualTo(upstreamRequests);
+	}
+
+	@Test
+	void allowedResponseHasNoRetryAfter() {
+		client().get()
+			.uri("/api/v1/payments")
+			.header("X-API-Key", "key-one")
+			.exchange()
+			.expectStatus()
+			.isOk()
+			.expectHeader()
+			.doesNotExist("Retry-After")
+			.expectHeader()
+			.valueEquals("X-RateLimit-Remaining", String.valueOf(BURST - 1));
 	}
 
 	@Test

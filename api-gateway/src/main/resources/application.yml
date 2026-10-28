@@ -23,6 +23,7 @@ spring:
                 - name: RequestRateLimiter
                   args:
                     key-resolver: "#{@apiKeyResolver}"
+                    throw-on-limit: true
                     redis-rate-limiter.replenish-rate: ${RATE_LIMIT_REPLENISH_RATE:10}
                     redis-rate-limiter.burst-capacity: ${RATE_LIMIT_BURST_CAPACITY:20}
                     redis-rate-limiter.requested-tokens: 1
