@@ -62,6 +62,13 @@ public class Transaction {
 	@Column(name = "processed_at")
 	private Instant processedAt;
 
+	@Column(name = "idempotency_key")
+	private String idempotencyKey;
+
+	@JdbcTypeCode(SqlTypes.CHAR)
+	@Column(name = "request_hash", length = 64)
+	private String requestHash;
+
 	@PrePersist
 	void onCreate() {
 		if (createdAt == null) {
