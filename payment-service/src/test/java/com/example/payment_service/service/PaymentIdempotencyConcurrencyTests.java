@@ -17,6 +17,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 
 import com.example.payment_service.TestcontainersConfiguration;
 import com.example.payment_service.auth.ApiKeyHasher;
@@ -24,7 +25,7 @@ import com.example.payment_service.dto.CreatePaymentRequest;
 import com.example.payment_service.entity.Merchant;
 import com.example.payment_service.entity.PaymentMethod;
 import com.example.payment_service.error.IdempotencyKeyReusedException;
-import com.example.payment_service.provider.PaymentProvider;
+import com.example.payment_service.provider.SimulatedPaymentProvider;
 import com.example.payment_service.provider.ProviderResult;
 import com.example.payment_service.repository.MerchantRepository;
 import com.example.payment_service.repository.TransactionRepository;
@@ -32,8 +33,8 @@ import com.example.payment_service.repository.TransactionRepository;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
+import static org.mockito.BDDMockito.willAnswer;
 import static org.mockito.Mockito.times;
 
 @SpringBootTest
@@ -51,8 +52,8 @@ class PaymentIdempotencyConcurrencyTests {
 	@Autowired
 	private TransactionRepository transactionRepository;
 
-	@MockitoBean
-	private PaymentProvider paymentProvider;
+	@MockitoSpyBean
+	private SimulatedPaymentProvider paymentProvider;
 
 	private final ExecutorService executor = Executors.newFixedThreadPool(2);
 
@@ -62,11 +63,11 @@ class PaymentIdempotencyConcurrencyTests {
 
 	@BeforeEach
 	void holdFirstRequestInProvider() {
-		given(paymentProvider.process(any())).willAnswer((invocation) -> {
+		willAnswer((invocation) -> {
 			firstInProvider.countDown();
 			releaseProvider.await(10, TimeUnit.SECONDS);
 			return ProviderResult.approved();
-		});
+		}).given(paymentProvider).process(any());
 	}
 
 	@AfterEach

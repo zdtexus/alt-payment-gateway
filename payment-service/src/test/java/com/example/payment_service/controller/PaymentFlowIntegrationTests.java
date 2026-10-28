@@ -11,6 +11,7 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.ResultActions;
@@ -21,7 +22,7 @@ import com.example.payment_service.entity.Merchant;
 import com.example.payment_service.entity.MerchantStatus;
 import com.example.payment_service.notification.email.EmailSender;
 import com.example.payment_service.notification.sms.SmsSender;
-import com.example.payment_service.provider.PaymentProvider;
+import com.example.payment_service.provider.SimulatedPaymentProvider;
 import com.example.payment_service.provider.ProviderResult;
 import com.example.payment_service.repository.MerchantRepository;
 import com.example.payment_service.repository.TransactionRepository;
@@ -33,8 +34,8 @@ import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.nullValue;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
+import static org.mockito.BDDMockito.willReturn;
 import static org.mockito.Mockito.times;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -59,8 +60,8 @@ class PaymentFlowIntegrationTests {
 	@Autowired
 	private TransactionRepository transactionRepository;
 
-	@MockitoBean
-	private PaymentProvider paymentProvider;
+	@MockitoSpyBean
+	private SimulatedPaymentProvider paymentProvider;
 
 	@MockitoBean
 	private EmailSender emailSender;
@@ -77,7 +78,7 @@ class PaymentFlowIntegrationTests {
 		merchant.setApiKeyHash(ApiKeyHasher.hash(OTHER_KEY));
 		merchant.setStatus(MerchantStatus.ACTIVE);
 		otherMerchant = merchantRepository.save(merchant);
-		given(paymentProvider.process(any())).willReturn(ProviderResult.approved());
+		willReturn(ProviderResult.approved()).given(paymentProvider).process(any());
 	}
 
 	@AfterEach
@@ -111,7 +112,7 @@ class PaymentFlowIntegrationTests {
 
 	@Test
 	void declinedPaymentIsStoredAndFilterableByStatus() throws Exception {
-		given(paymentProvider.process(any())).willReturn(ProviderResult.declined("Insufficient funds"));
+		willReturn(ProviderResult.declined("Insufficient funds")).given(paymentProvider).process(any());
 
 		MvcResult created = mvc
 			.perform(post("/api/v1/payments").header("X-API-Key", DEMO_KEY)

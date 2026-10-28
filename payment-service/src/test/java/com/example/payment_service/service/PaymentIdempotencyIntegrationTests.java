@@ -10,6 +10,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.context.event.ApplicationEvents;
 import org.springframework.test.context.event.RecordApplicationEvents;
 
@@ -24,7 +25,7 @@ import com.example.payment_service.entity.TransactionStatus;
 import com.example.payment_service.error.IdempotencyKeyReusedException;
 import com.example.payment_service.error.PaymentRuleViolationException;
 import com.example.payment_service.event.PaymentProcessedEvent;
-import com.example.payment_service.provider.PaymentProvider;
+import com.example.payment_service.provider.SimulatedPaymentProvider;
 import com.example.payment_service.provider.ProviderResult;
 import com.example.payment_service.repository.MerchantRepository;
 import com.example.payment_service.repository.TransactionRepository;
@@ -32,8 +33,8 @@ import com.example.payment_service.repository.TransactionRepository;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
+import static org.mockito.BDDMockito.willReturn;
 import static org.mockito.Mockito.times;
 
 @SpringBootTest
@@ -52,8 +53,8 @@ class PaymentIdempotencyIntegrationTests {
 	@Autowired
 	private TransactionRepository transactionRepository;
 
-	@MockitoBean
-	private PaymentProvider paymentProvider;
+	@MockitoSpyBean
+	private SimulatedPaymentProvider paymentProvider;
 
 	@Autowired
 	private ApplicationEvents events;
@@ -70,7 +71,7 @@ class PaymentIdempotencyIntegrationTests {
 
 	@Test
 	void sameKeyAndBodyReturnsOriginalPaymentWithoutCallingProviderAgain() {
-		given(paymentProvider.process(any())).willReturn(ProviderResult.approved());
+		willReturn(ProviderResult.approved()).given(paymentProvider).process(any());
 
 		PaymentOutcome first = paymentService.process(demoMerchant(), request("49.90", "EUR"), KEY);
 		PaymentOutcome retry = paymentService.process(demoMerchant(), request("49.90", "EUR"), KEY);
@@ -85,8 +86,8 @@ class PaymentIdempotencyIntegrationTests {
 
 	@Test
 	void replayReturnsStoredDeclineEvenIfProviderWouldNowApprove() {
-		given(paymentProvider.process(any())).willReturn(ProviderResult.declined("Insufficient funds"),
-				ProviderResult.approved());
+		willReturn(ProviderResult.declined("Insufficient funds"),
+				ProviderResult.approved()).given(paymentProvider).process(any());
 
 		paymentService.process(demoMerchant(), request("49.90", "EUR"), KEY);
 		PaymentOutcome retry = paymentService.process(demoMerchant(), request("49.90", "EUR"), KEY);
@@ -98,7 +99,7 @@ class PaymentIdempotencyIntegrationTests {
 
 	@Test
 	void equalAmountWrittenDifferentlyIsTheSameRequest() {
-		given(paymentProvider.process(any())).willReturn(ProviderResult.approved());
+		willReturn(ProviderResult.approved()).given(paymentProvider).process(any());
 
 		PaymentOutcome first = paymentService.process(demoMerchant(), request("49.9", "EUR"), KEY);
 		PaymentOutcome retry = paymentService.process(demoMerchant(), request("49.90", "EUR"), KEY);
@@ -111,7 +112,7 @@ class PaymentIdempotencyIntegrationTests {
 
 	@Test
 	void sameKeyWithDifferentBodyIsRejected() {
-		given(paymentProvider.process(any())).willReturn(ProviderResult.approved());
+		willReturn(ProviderResult.approved()).given(paymentProvider).process(any());
 		paymentService.process(demoMerchant(), request("49.90", "EUR"), KEY);
 
 		assertThatExceptionOfType(IdempotencyKeyReusedException.class)
@@ -126,7 +127,7 @@ class PaymentIdempotencyIntegrationTests {
 
 	@Test
 	void keysAreScopedPerMerchant() {
-		given(paymentProvider.process(any())).willReturn(ProviderResult.approved());
+		willReturn(ProviderResult.approved()).given(paymentProvider).process(any());
 		otherMerchant = createMerchant();
 
 		PaymentOutcome demo = paymentService.process(demoMerchant(), request("49.90", "EUR"), KEY);
@@ -140,7 +141,7 @@ class PaymentIdempotencyIntegrationTests {
 
 	@Test
 	void requestsWithoutKeyAlwaysCreateNewPayments() {
-		given(paymentProvider.process(any())).willReturn(ProviderResult.approved());
+		willReturn(ProviderResult.approved()).given(paymentProvider).process(any());
 
 		PaymentOutcome first = paymentService.process(demoMerchant(), request("49.90", "EUR"), null);
 		PaymentOutcome second = paymentService.process(demoMerchant(), request("49.90", "EUR"), null);
@@ -153,7 +154,7 @@ class PaymentIdempotencyIntegrationTests {
 
 	@Test
 	void keyIsStoredWithRequestHash() {
-		given(paymentProvider.process(any())).willReturn(ProviderResult.approved());
+		willReturn(ProviderResult.approved()).given(paymentProvider).process(any());
 
 		PaymentOutcome outcome = paymentService.process(demoMerchant(), request("49.90", "EUR"), KEY);
 
@@ -164,7 +165,7 @@ class PaymentIdempotencyIntegrationTests {
 
 	@Test
 	void rejectedRequestDoesNotUseUpTheKey() {
-		given(paymentProvider.process(any())).willReturn(ProviderResult.approved());
+		willReturn(ProviderResult.approved()).given(paymentProvider).process(any());
 
 		assertThatExceptionOfType(PaymentRuleViolationException.class)
 			.isThrownBy(() -> paymentService.process(demoMerchant(), request("49.90", "GBP"), KEY));

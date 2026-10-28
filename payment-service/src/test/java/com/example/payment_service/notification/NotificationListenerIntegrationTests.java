@@ -13,6 +13,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.mail.MailSendException;
 import org.springframework.mail.javamail.JavaMailSenderImpl;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -26,7 +27,7 @@ import com.example.payment_service.entity.Transaction;
 import com.example.payment_service.entity.TransactionStatus;
 import com.example.payment_service.notification.email.EmailSender;
 import com.example.payment_service.notification.sms.SmsSender;
-import com.example.payment_service.provider.PaymentProvider;
+import com.example.payment_service.provider.SimulatedPaymentProvider;
 import com.example.payment_service.provider.ProviderResult;
 import com.example.payment_service.repository.MerchantRepository;
 import com.example.payment_service.repository.TransactionRepository;
@@ -36,8 +37,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willAnswer;
+import static org.mockito.BDDMockito.willReturn;
 import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.after;
 import static org.mockito.Mockito.never;
@@ -63,8 +64,8 @@ class NotificationListenerIntegrationTests {
 	@Autowired
 	private PlatformTransactionManager transactionManager;
 
-	@MockitoBean
-	private PaymentProvider paymentProvider;
+	@MockitoSpyBean
+	private SimulatedPaymentProvider paymentProvider;
 
 	@MockitoBean
 	private EmailSender emailSender;
@@ -79,7 +80,7 @@ class NotificationListenerIntegrationTests {
 
 	@Test
 	void committedPaymentSendsReceiptAsynchronously() {
-		given(paymentProvider.process(any())).willReturn(ProviderResult.approved());
+		willReturn(ProviderResult.approved()).given(paymentProvider).process(any());
 		AtomicReference<String> senderThread = new AtomicReference<>();
 		willAnswer((invocation) -> {
 			senderThread.set(Thread.currentThread().getName());
@@ -96,7 +97,7 @@ class NotificationListenerIntegrationTests {
 
 	@Test
 	void rolledBackPaymentSendsNothing() {
-		given(paymentProvider.process(any())).willReturn(ProviderResult.approved());
+		willReturn(ProviderResult.approved()).given(paymentProvider).process(any());
 		AtomicReference<UUID> paymentId = new AtomicReference<>();
 
 		new TransactionTemplate(transactionManager).executeWithoutResult((status) -> {
@@ -113,7 +114,7 @@ class NotificationListenerIntegrationTests {
 
 	@Test
 	void providerFailureSendsNothing() {
-		given(paymentProvider.process(any())).willThrow(new IllegalStateException("Provider unreachable"));
+		willThrow(new IllegalStateException("Provider unreachable")).given(paymentProvider).process(any());
 
 		assertThatExceptionOfType(IllegalStateException.class).isThrownBy(() -> paymentService.process(demoMerchant(),
 				new CreatePaymentRequest(new BigDecimal("49.90"), "EUR", PaymentMethod.CARD)));
@@ -125,7 +126,7 @@ class NotificationListenerIntegrationTests {
 
 	@Test
 	void failingMailServerDoesNotAffectPayment() {
-		given(paymentProvider.process(any())).willReturn(ProviderResult.approved());
+		willReturn(ProviderResult.approved()).given(paymentProvider).process(any());
 		willThrow(new MailSendException("Connection refused")).given(emailSender).send(any(), any(), any());
 
 		PaymentResponse response = paymentService.process(demoMerchant(),

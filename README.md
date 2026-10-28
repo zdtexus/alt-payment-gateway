@@ -137,8 +137,9 @@ Services are configured through environment variables. Defaults are suitable for
 | `MAIL_HOST` | payment-service | `localhost` | SMTP host |
 | `MAIL_PORT` | payment-service | `1025` | SMTP port |
 | `MAIL_TIMEOUT_MS` | payment-service | `5000` | SMTP connect, read and write timeout in milliseconds |
-| `PAYMENT_PROVIDER_SUCCESS_RATE` | payment-service | `0.9` | Share of payments the simulated provider approves, from `0.0` to `1.0` |
-| `PAYMENT_PROVIDER_LATENCY` | payment-service | `300ms` | Simulated provider response time |
+| `PAYMENT_PROVIDER_DEFAULT` | payment-service | `simulated` | Name of the payment provider that processes payments. Must name a registered provider. |
+| `PAYMENT_PROVIDER_SUCCESS_RATE` | payment-service | `0.9` | Share of payments the `simulated` provider approves, from `0.0` to `1.0` (`payment.provider.simulated.success-rate`) |
+| `PAYMENT_PROVIDER_LATENCY` | payment-service | `300ms` | `simulated` provider response time (`payment.provider.simulated.latency`) |
 | `SMS_PROVIDER` | payment-service | `log` | SMS implementation: `log` or `http` |
 | `NOTIFICATION_SMS_HTTP_URL` | payment-service | | SMS gateway endpoint, required when `SMS_PROVIDER=http` |
 | `NOTIFICATION_SMS_HTTP_API_KEY` | payment-service | | Sent as `Authorization: Bearer <key>` when set |
@@ -154,7 +155,7 @@ Services are configured through environment variables. Defaults are suitable for
 
 With Docker Compose, put any of these in `.env` (see the commented examples in `.env.example`) and run `docker compose up -d` to apply them. Settings that are not set keep their defaults. `DB_URL`, `MAIL_HOST`, `MAIL_PORT`, `PAYMENT_SERVICE_URL`, `REDIS_HOST` and `REDIS_PORT` are fixed in `docker-compose.yml` to point at the containers.
 
-The gateway refuses to start when a rate limit is below 1 or its burst capacity is smaller than its replenish rate. The service refuses to start with invalid settings, for example a missing or short `ADMIN_API_KEY`, a success rate outside `0.0`–`1.0`, an unknown SMS provider, or `SMS_PROVIDER=http` without a URL.
+The gateway refuses to start when a rate limit is below 1 or its burst capacity is smaller than its replenish rate. The service refuses to start with invalid settings, for example a `PAYMENT_PROVIDER_DEFAULT` that names no registered provider, a missing or short `ADMIN_API_KEY`, a success rate outside `0.0`–`1.0`, an unknown SMS provider, or `SMS_PROVIDER=http` without a URL.
 
 ### SMS providers
 

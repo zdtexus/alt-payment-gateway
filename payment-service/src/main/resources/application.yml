@@ -27,8 +27,10 @@ admin:
 
 payment:
   provider:
-    success-rate: ${PAYMENT_PROVIDER_SUCCESS_RATE:0.9}
-    latency: ${PAYMENT_PROVIDER_LATENCY:300ms}
+    default-provider: ${PAYMENT_PROVIDER_DEFAULT:simulated}
+    simulated:
+      success-rate: ${PAYMENT_PROVIDER_SUCCESS_RATE:0.9}
+      latency: ${PAYMENT_PROVIDER_LATENCY:300ms}
 
 notification:
   email:

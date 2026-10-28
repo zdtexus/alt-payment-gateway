@@ -24,7 +24,7 @@ import com.example.payment_service.entity.TransactionStatus;
 import com.example.payment_service.error.IdempotencyKeyReusedException;
 import com.example.payment_service.error.PaymentNotFoundException;
 import com.example.payment_service.event.PaymentProcessedEvent;
-import com.example.payment_service.provider.PaymentProvider;
+import com.example.payment_service.provider.PaymentProviderRouter;
 import com.example.payment_service.provider.ProviderRequest;
 import com.example.payment_service.provider.ProviderResult;
 import com.example.payment_service.repository.TransactionRepository;
@@ -39,18 +39,18 @@ public class PaymentService {
 
 	private final PaymentRuleValidator ruleValidator;
 
-	private final PaymentProvider paymentProvider;
+	private final PaymentProviderRouter providerRouter;
 
 	private final ApplicationEventPublisher eventPublisher;
 
 	private final TransactionTemplate transactionTemplate;
 
 	public PaymentService(TransactionRepository transactionRepository, PaymentRuleValidator ruleValidator,
-			PaymentProvider paymentProvider, ApplicationEventPublisher eventPublisher,
+			PaymentProviderRouter providerRouter, ApplicationEventPublisher eventPublisher,
 			TransactionTemplate transactionTemplate) {
 		this.transactionRepository = transactionRepository;
 		this.ruleValidator = ruleValidator;
-		this.paymentProvider = paymentProvider;
+		this.providerRouter = providerRouter;
 		this.eventPublisher = eventPublisher;
 		this.transactionTemplate = transactionTemplate;
 	}
@@ -98,8 +98,9 @@ public class PaymentService {
 		transaction.setStatus(TransactionStatus.PENDING);
 		transaction = transactionRepository.saveAndFlush(transaction);
 
-		ProviderResult result = paymentProvider.process(new ProviderRequest(transaction.getId(),
-				transaction.getPaymentMethod(), transaction.getCurrency(), transaction.getAmount()));
+		ProviderResult result = providerRouter.providerFor(transaction.getPaymentMethod())
+			.process(new ProviderRequest(transaction.getId(), transaction.getPaymentMethod(), transaction.getCurrency(),
+					transaction.getAmount()));
 		switch (result) {
 			case ProviderResult.Approved approved -> transaction.setStatus(TransactionStatus.SUCCEEDED);
 			case ProviderResult.Declined(String reason) -> {

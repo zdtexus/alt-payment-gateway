@@ -18,6 +18,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
@@ -27,7 +28,7 @@ import com.example.payment_service.entity.Merchant;
 import com.example.payment_service.entity.MerchantStatus;
 import com.example.payment_service.notification.email.EmailSender;
 import com.example.payment_service.notification.sms.SmsSender;
-import com.example.payment_service.provider.PaymentProvider;
+import com.example.payment_service.provider.SimulatedPaymentProvider;
 import com.example.payment_service.provider.ProviderResult;
 import com.example.payment_service.repository.MerchantRepository;
 import com.example.payment_service.repository.TransactionRepository;
@@ -37,8 +38,8 @@ import static org.hamcrest.Matchers.containsInAnyOrder;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
+import static org.mockito.BDDMockito.willReturn;
 import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.times;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -68,8 +69,8 @@ class MerchantAdminFlowIntegrationTests {
 	@Autowired
 	private TransactionRepository transactionRepository;
 
-	@MockitoBean
-	private PaymentProvider paymentProvider;
+	@MockitoSpyBean
+	private SimulatedPaymentProvider paymentProvider;
 
 	@MockitoBean
 	private EmailSender emailSender;
@@ -79,7 +80,7 @@ class MerchantAdminFlowIntegrationTests {
 
 	@BeforeEach
 	void approvePayments() {
-		given(paymentProvider.process(any())).willReturn(ProviderResult.approved());
+		willReturn(ProviderResult.approved()).given(paymentProvider).process(any());
 	}
 
 	@AfterEach

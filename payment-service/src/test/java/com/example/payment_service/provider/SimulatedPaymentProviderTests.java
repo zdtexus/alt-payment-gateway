@@ -33,6 +33,11 @@ class SimulatedPaymentProviderTests {
 	}
 
 	@Test
+	void isNamedSimulated() {
+		assertThat(provider(1.0, Duration.ZERO).name()).isEqualTo("simulated");
+	}
+
+	@Test
 	void waitsForConfiguredLatency() {
 		SimulatedPaymentProvider provider = provider(1.0, Duration.ofMillis(100));
 
@@ -43,7 +48,7 @@ class SimulatedPaymentProviderTests {
 	}
 
 	private static SimulatedPaymentProvider provider(double successRate, Duration latency) {
-		return new SimulatedPaymentProvider(new PaymentProviderProperties(successRate, latency));
+		return new SimulatedPaymentProvider(new SimulatedPaymentProviderProperties(successRate, latency));
 	}
 
 }

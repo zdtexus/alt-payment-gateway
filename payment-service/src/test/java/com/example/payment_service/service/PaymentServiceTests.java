@@ -32,6 +32,7 @@ import com.example.payment_service.error.PaymentNotFoundException;
 import com.example.payment_service.error.PaymentRuleViolationException;
 import com.example.payment_service.event.PaymentProcessedEvent;
 import com.example.payment_service.provider.PaymentProvider;
+import com.example.payment_service.provider.PaymentProviderRouter;
 import com.example.payment_service.provider.ProviderRequest;
 import com.example.payment_service.provider.ProviderResult;
 import com.example.payment_service.repository.TransactionRepository;
@@ -63,10 +64,12 @@ class PaymentServiceTests {
 
 	private final PaymentProvider paymentProvider = mock();
 
+	private final PaymentProviderRouter providerRouter = mock();
+
 	private final ApplicationEventPublisher eventPublisher = mock();
 
 	private final PaymentService paymentService = new PaymentService(transactionRepository, ruleValidator,
-			paymentProvider, eventPublisher, new TransactionTemplate(mock(PlatformTransactionManager.class)));
+			providerRouter, eventPublisher, new TransactionTemplate(mock(PlatformTransactionManager.class)));
 
 	private final Merchant merchant = new Merchant();
 
@@ -74,6 +77,7 @@ class PaymentServiceTests {
 
 	@BeforeEach
 	void assignIdOnSave() {
+		given(providerRouter.providerFor(any())).willReturn(paymentProvider);
 		given(transactionRepository.saveAndFlush(any())).willAnswer((invocation) -> {
 			Transaction transaction = invocation.getArgument(0);
 			statusWhenSaved.set(transaction.getStatus());
@@ -121,6 +125,16 @@ class PaymentServiceTests {
 		assertThat(saved.getValue().getMerchant()).isSameAs(merchant);
 		verify(paymentProvider)
 			.process(new ProviderRequest(PAYMENT_ID, PaymentMethod.CARD, "EUR", new BigDecimal("49.90")));
+	}
+
+	@Test
+	void asksRouterForTheProviderOfThePaymentMethod() {
+		given(paymentProvider.process(any())).willReturn(ProviderResult.approved());
+
+		paymentService.process(merchant,
+				new CreatePaymentRequest(new BigDecimal("20.00"), "EUR", PaymentMethod.KVIK));
+
+		verify(providerRouter).providerFor(PaymentMethod.KVIK);
 	}
 
 	@Test
@@ -204,7 +218,7 @@ class PaymentServiceTests {
 
 		assertThatExceptionOfType(PaymentRuleViolationException.class)
 			.isThrownBy(() -> paymentService.process(merchant, REQUEST));
-		verifyNoInteractions(transactionRepository, paymentProvider, eventPublisher);
+		verifyNoInteractions(transactionRepository, providerRouter, paymentProvider, eventPublisher);
 	}
 
 	private static Transaction transaction() {

@@ -12,7 +12,7 @@ import org.springframework.context.annotation.Configuration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-class PaymentProviderPropertiesTests {
+class SimulatedPaymentProviderPropertiesTests {
 
 	private final ApplicationContextRunner contextRunner = new ApplicationContextRunner()
 		.withUserConfiguration(Config.class);
@@ -20,7 +20,7 @@ class PaymentProviderPropertiesTests {
 	@Test
 	void usesDefaultsWhenNotConfigured() {
 		contextRunner.run((context) -> {
-			PaymentProviderProperties properties = context.getBean(PaymentProviderProperties.class);
+			SimulatedPaymentProviderProperties properties = context.getBean(SimulatedPaymentProviderProperties.class);
 			assertThat(properties.successRate()).isEqualTo(0.9);
 			assertThat(properties.latency()).isEqualTo(Duration.ofMillis(300));
 		});
@@ -28,9 +28,11 @@ class PaymentProviderPropertiesTests {
 
 	@Test
 	void bindsConfiguredValues() {
-		contextRunner.withPropertyValues("payment.provider.success-rate=0.25", "payment.provider.latency=2s")
+		contextRunner
+			.withPropertyValues("payment.provider.simulated.success-rate=0.25", "payment.provider.simulated.latency=2s")
 			.run((context) -> {
-				PaymentProviderProperties properties = context.getBean(PaymentProviderProperties.class);
+				SimulatedPaymentProviderProperties properties = context
+					.getBean(SimulatedPaymentProviderProperties.class);
 				assertThat(properties.successRate()).isEqualTo(0.25);
 				assertThat(properties.latency()).isEqualTo(Duration.ofSeconds(2));
 			});
@@ -39,12 +41,12 @@ class PaymentProviderPropertiesTests {
 	@ParameterizedTest
 	@ValueSource(strings = { "-0.1", "1.5" })
 	void rejectsSuccessRateOutsideZeroToOne(String successRate) {
-		contextRunner.withPropertyValues("payment.provider.success-rate=" + successRate)
+		contextRunner.withPropertyValues("payment.provider.simulated.success-rate=" + successRate)
 			.run((context) -> assertThat(context).hasFailed());
 	}
 
 	@Configuration(proxyBeanMethods = false)
-	@EnableConfigurationProperties(PaymentProviderProperties.class)
+	@EnableConfigurationProperties(SimulatedPaymentProviderProperties.class)
 	static class Config {
 
 	}

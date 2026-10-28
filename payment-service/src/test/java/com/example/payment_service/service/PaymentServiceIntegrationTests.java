@@ -9,6 +9,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.context.event.ApplicationEvents;
 import org.springframework.test.context.event.RecordApplicationEvents;
 
@@ -22,7 +23,7 @@ import com.example.payment_service.entity.Transaction;
 import com.example.payment_service.entity.TransactionStatus;
 import com.example.payment_service.error.PaymentRuleViolationException;
 import com.example.payment_service.event.PaymentProcessedEvent;
-import com.example.payment_service.provider.PaymentProvider;
+import com.example.payment_service.provider.SimulatedPaymentProvider;
 import com.example.payment_service.provider.ProviderResult;
 import com.example.payment_service.repository.MerchantRepository;
 import com.example.payment_service.repository.TransactionRepository;
@@ -30,7 +31,8 @@ import com.example.payment_service.repository.TransactionRepository;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.BDDMockito.given;
+import static org.mockito.BDDMockito.willReturn;
+import static org.mockito.BDDMockito.willThrow;
 
 @SpringBootTest
 @Import(TestcontainersConfiguration.class)
@@ -46,8 +48,8 @@ class PaymentServiceIntegrationTests {
 	@Autowired
 	private TransactionRepository transactionRepository;
 
-	@MockitoBean
-	private PaymentProvider paymentProvider;
+	@MockitoSpyBean
+	private SimulatedPaymentProvider paymentProvider;
 
 	@Autowired
 	private ApplicationEvents events;
@@ -59,7 +61,7 @@ class PaymentServiceIntegrationTests {
 
 	@Test
 	void approvedPaymentIsStoredAsSucceeded() {
-		given(paymentProvider.process(any())).willReturn(ProviderResult.approved());
+		willReturn(ProviderResult.approved()).given(paymentProvider).process(any());
 
 		PaymentResponse response = paymentService.process(demoMerchant(), request("49.90", PaymentMethod.CARD));
 
@@ -79,7 +81,7 @@ class PaymentServiceIntegrationTests {
 
 	@Test
 	void declinedPaymentIsStoredWithReason() {
-		given(paymentProvider.process(any())).willReturn(ProviderResult.declined("Insufficient funds"));
+		willReturn(ProviderResult.declined("Insufficient funds")).given(paymentProvider).process(any());
 
 		PaymentResponse response = paymentService.process(demoMerchant(), request("49.90", PaymentMethod.CARD));
 
@@ -100,7 +102,7 @@ class PaymentServiceIntegrationTests {
 
 	@Test
 	void providerFailureRollsBackPendingTransaction() {
-		given(paymentProvider.process(any())).willThrow(new IllegalStateException("Provider unreachable"));
+		willThrow(new IllegalStateException("Provider unreachable")).given(paymentProvider).process(any());
 
 		assertThatExceptionOfType(IllegalStateException.class)
 			.isThrownBy(() -> paymentService.process(demoMerchant(), request("49.90", PaymentMethod.CARD)));

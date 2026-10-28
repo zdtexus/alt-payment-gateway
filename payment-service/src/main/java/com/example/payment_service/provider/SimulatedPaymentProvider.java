@@ -8,13 +8,20 @@ import org.springframework.stereotype.Component;
 @Component
 public class SimulatedPaymentProvider implements PaymentProvider {
 
+	public static final String NAME = "simulated";
+
 	private static final List<String> DECLINE_REASONS = List.of("Insufficient funds", "Suspected fraud",
 			"Limit exceeded");
 
-	private final PaymentProviderProperties properties;
+	private final SimulatedPaymentProviderProperties properties;
 
-	public SimulatedPaymentProvider(PaymentProviderProperties properties) {
+	public SimulatedPaymentProvider(SimulatedPaymentProviderProperties properties) {
 		this.properties = properties;
+	}
+
+	@Override
+	public String name() {
+		return NAME;
 	}
 
 	@Override
