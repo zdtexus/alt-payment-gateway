@@ -4,6 +4,12 @@ server:
 spring:
   application:
     name: api-gateway
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      repositories:
+        enabled: false
   cloud:
     gateway:
       server:
@@ -19,6 +25,9 @@ spring:
                 - Path=/v3/api-docs/**,/swagger-ui/**,/swagger-ui.html
 
 management:
+  health:
+    redis:
+      enabled: false
   endpoint:
     gateway:
       access: read-only

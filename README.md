@@ -22,10 +22,10 @@ The system consists of an API gateway and a payment service, backed by PostgreSQ
 
 ```text
 Client ──► api-gateway :8080 ──(/api/v1/**)──► payment-service :8081
-                                                     │
-                                   ┌─────────────────┼───────────────────────┐
-                                   ▼                 ▼                       ▼
-                             PostgreSQL :5432      SMTP (Mailpit)        SMS sender
+                │                                    │
+                │                  ┌─────────────────┼───────────────────────┐
+                ▼                  ▼                 ▼                       ▼
+           Redis :6379       PostgreSQL :5432      SMTP (Mailpit)        SMS sender
 ```
 
 | Component | Port | Description |
@@ -34,6 +34,7 @@ Client ──► api-gateway :8080 ──(/api/v1/**)──► payment-service :
 | `payment-service` | 8081 | Payment processing, validation, persistence and notifications. Reachable only through the gateway. |
 | `postgres` | 5432 | Primary database. |
 | `mailpit` | 1025, 8025 | Local SMTP server with a web inbox for development. |
+| `redis` | 6379 | Used by the gateway for rate limiting. Holds only short-lived counters, so it keeps no data on disk. |
 
 Notifications are decoupled from payment processing through Spring application events. The listener runs asynchronously after the transaction commits, so a slow or failing mail server never affects the payment, and no receipt is sent for a payment that was rolled back.
 
@@ -84,10 +85,10 @@ To stop, press `Ctrl+C` or run `docker compose down`.
 
 ### Running without Docker
 
-If you prefer to run the services from your IDE, start only the database and mail server in Docker:
+If you prefer to run the services from your IDE, start only the database, mail server and Redis in Docker:
 
 ```bash
-docker compose up -d postgres mailpit
+docker compose up -d postgres mailpit redis
 ```
 
 Then start each service in its own terminal. `payment-service` needs an admin key:
@@ -143,8 +144,10 @@ Services are configured through environment variables. Defaults are suitable for
 | `NOTIFICATION_SMS_HTTP_API_KEY` | payment-service | | Sent as `Authorization: Bearer <key>` when set |
 | `NOTIFICATION_SMS_HTTP_TIMEOUT` | payment-service | `5s` | SMS gateway connect and read timeout |
 | `PAYMENT_SERVICE_URL` | api-gateway | `http://localhost:8081` | Upstream payment service |
+| `REDIS_HOST` | api-gateway | `localhost` | Redis host |
+| `REDIS_PORT` | api-gateway | `6379` | Redis port |
 
-With Docker Compose, put any of these in `.env` (see the commented examples in `.env.example`) and run `docker compose up -d` to apply them. Settings that are not set keep their defaults. `DB_URL`, `MAIL_HOST` and `MAIL_PORT` are fixed in `docker-compose.yml` to point at the containers.
+With Docker Compose, put any of these in `.env` (see the commented examples in `.env.example`) and run `docker compose up -d` to apply them. Settings that are not set keep their defaults. `DB_URL`, `MAIL_HOST`, `MAIL_PORT` and `REDIS_HOST` are fixed in `docker-compose.yml` to point at the containers.
 
 The service refuses to start with invalid settings, for example a missing or short `ADMIN_API_KEY`, a success rate outside `0.0`–`1.0`, an unknown SMS provider, or `SMS_PROVIDER=http` without a URL.
 
@@ -350,4 +353,4 @@ alt-payment-gateway/
 
 ## Tech Stack
 
-Java 25, Spring Boot 4, Spring Cloud Gateway, Spring Data JPA, Hibernate, Bean Validation, Spring Mail, PostgreSQL, Flyway, springdoc-openapi, JUnit 5, Mockito, Testcontainers, Docker.
+Java 25, Spring Boot 4, Spring Cloud Gateway, Spring Data JPA, Hibernate, Bean Validation, Spring Mail, PostgreSQL, Redis, Flyway, springdoc-openapi, JUnit 5, Mockito, Testcontainers, Docker.
