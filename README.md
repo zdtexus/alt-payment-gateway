@@ -11,7 +11,7 @@ The system consists of an API gateway and a payment service, backed by PostgreSQ
 - Admin API to create merchants, suspend them and rotate their API keys
 - Safe retries with the `Idempotency-Key` header, so a retried payment is never charged twice
 - Multiple payment methods with per-method currency and amount rules
-- Payment providers selected per payment method, with a simulated provider that has a configurable success rate and latency
+- Payment providers selected per payment method: a simulated provider with a configurable success rate and latency, and a fixed provider that always approves or always declines
 - Asynchronous email and SMS receipts, sent only after the payment is committed
 - Consistent JSON error responses
 - Versioned database schema with Flyway
@@ -141,6 +141,8 @@ Services are configured through environment variables. Defaults are suitable for
 | `PAYMENT_PROVIDER_ROUTES_<METHOD>` | payment-service | | Payment provider for one method, for example `PAYMENT_PROVIDER_ROUTES_CARD=simulated` (`payment.provider.routes.CARD`). Overrides the default for that method. |
 | `PAYMENT_PROVIDER_SUCCESS_RATE` | payment-service | `0.9` | Share of payments the `simulated` provider approves, from `0.0` to `1.0` (`payment.provider.simulated.success-rate`) |
 | `PAYMENT_PROVIDER_LATENCY` | payment-service | `300ms` | `simulated` provider response time (`payment.provider.simulated.latency`) |
+| `PAYMENT_PROVIDER_FIXED_OUTCOME` | payment-service | `approve` | What the `fixed` provider answers to every payment: `approve` or `decline` (`payment.provider.fixed.outcome`) |
+| `PAYMENT_PROVIDER_FIXED_DECLINE_REASON` | payment-service | `Declined by fixed provider` | Decline reason the `fixed` provider gives, at most 255 characters (`payment.provider.fixed.decline-reason`) |
 | `SMS_PROVIDER` | payment-service | `log` | SMS implementation: `log` or `http` |
 | `NOTIFICATION_SMS_HTTP_URL` | payment-service | | SMS gateway endpoint, required when `SMS_PROVIDER=http` |
 | `NOTIFICATION_SMS_HTTP_API_KEY` | payment-service | | Sent as `Authorization: Bearer <key>` when set |
@@ -156,7 +158,7 @@ Services are configured through environment variables. Defaults are suitable for
 
 With Docker Compose, put any of these in `.env` (see the commented examples in `.env.example`) and run `docker compose up -d` to apply them. Settings that are not set keep their defaults. `DB_URL`, `MAIL_HOST`, `MAIL_PORT`, `PAYMENT_SERVICE_URL`, `REDIS_HOST` and `REDIS_PORT` are fixed in `docker-compose.yml` to point at the containers.
 
-The gateway refuses to start when a rate limit is below 1 or its burst capacity is smaller than its replenish rate. The service refuses to start with invalid settings, for example a `PAYMENT_PROVIDER_DEFAULT` or route that names no registered provider, a payment method left without a provider, a missing or short `ADMIN_API_KEY`, a success rate outside `0.0`–`1.0`, an unknown SMS provider, or `SMS_PROVIDER=http` without a URL.
+The gateway refuses to start when a rate limit is below 1 or its burst capacity is smaller than its replenish rate. The service refuses to start with invalid settings, for example a `PAYMENT_PROVIDER_DEFAULT` or route that names no registered provider, a payment method left without a provider, a missing or short `ADMIN_API_KEY`, a success rate outside `0.0`–`1.0`, a `fixed` outcome other than `approve`/`decline` or a blank decline reason, an unknown SMS provider, or `SMS_PROVIDER=http` without a URL.
 
 ### SMS providers
 
@@ -170,6 +172,7 @@ Each payment method is sent to one payment provider. A method uses its route (`P
 Available providers:
 
 - `simulated` (default) approves a share of payments (`PAYMENT_PROVIDER_SUCCESS_RATE`) after a delay (`PAYMENT_PROVIDER_LATENCY`), and returns a reference such as `sim_04347846-62b6-42f4-9d6b-917f5704225c`.
+- `fixed` gives the same answer to every payment, at once: it approves (`PAYMENT_PROVIDER_FIXED_OUTCOME=approve`, the default) or declines with `PAYMENT_PROVIDER_FIXED_DECLINE_REASON`. References look like `fix_<uuid>`. No method uses it unless routed, for example `PAYMENT_PROVIDER_ROUTES_CRYPTO=fixed` with `PAYMENT_PROVIDER_FIXED_OUTCOME=decline` to reject all crypto payments while card payments keep using `simulated`.
 
 Each transaction stores the provider name and the provider's reference (see [Database](#database)). Both are internal: merchants don't see them in API responses, so providers and routes can change without affecting merchants.
 
@@ -398,7 +401,7 @@ alt-payment-gateway/
 │       ├── error/            Exceptions and the common error format
 │       ├── event/            PaymentProcessedEvent
 │       ├── notification/     Receipt listener, email and SMS senders
-│       ├── provider/         Payment provider interface, registry, per-method router and simulator
+│       ├── provider/         Payment provider interface, registry, per-method router, simulated and fixed providers
 │       ├── repository/       Spring Data repositories
 │       ├── rules/            Per-method currency and amount rules
 │       └── service/          Payment processing and merchant administration
