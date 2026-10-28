@@ -143,7 +143,7 @@ class GatewayForwardingTests {
 	}
 
 	@Test
-	void listsBothRoutesInActuator() {
+	void listsAllRoutesInActuator() {
 		client().get()
 			.uri("/actuator/gateway/routes")
 			.exchange()
@@ -151,7 +151,7 @@ class GatewayForwardingTests {
 			.isOk()
 			.expectBody()
 			.jsonPath("$[*].route_id")
-			.value(containsInAnyOrder("payment-service", "payment-service-docs"));
+			.value(containsInAnyOrder("payment-service", "payment-service-admin", "payment-service-docs"));
 	}
 
 	@Test

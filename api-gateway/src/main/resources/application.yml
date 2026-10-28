@@ -18,7 +18,18 @@ spring:
             - id: payment-service
               uri: ${PAYMENT_SERVICE_URL:http://localhost:8081}
               predicates:
-                - Path=/api/v1/**,/admin/**
+                - Path=/api/v1/**
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    key-resolver: "#{@apiKeyResolver}"
+                    redis-rate-limiter.replenish-rate: ${RATE_LIMIT_REPLENISH_RATE:10}
+                    redis-rate-limiter.burst-capacity: ${RATE_LIMIT_BURST_CAPACITY:20}
+                    redis-rate-limiter.requested-tokens: 1
+            - id: payment-service-admin
+              uri: ${PAYMENT_SERVICE_URL:http://localhost:8081}
+              predicates:
+                - Path=/admin/**
             - id: payment-service-docs
               uri: ${PAYMENT_SERVICE_URL:http://localhost:8081}
               predicates:

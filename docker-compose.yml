@@ -58,6 +58,8 @@ services:
     environment:
       PAYMENT_SERVICE_URL: http://payment-service:8081
       REDIS_HOST: redis
+      RATE_LIMIT_REPLENISH_RATE:
+      RATE_LIMIT_BURST_CAPACITY:
     ports:
       - "8080:8080"
     depends_on:
