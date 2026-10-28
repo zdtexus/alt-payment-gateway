@@ -6,12 +6,14 @@ import java.util.Optional;
 import java.util.UUID;
 
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import com.example.payment_service.dto.CreatePaymentRequest;
 import com.example.payment_service.dto.PageResponse;
@@ -41,34 +43,49 @@ public class PaymentService {
 
 	private final ApplicationEventPublisher eventPublisher;
 
+	private final TransactionTemplate transactionTemplate;
+
 	public PaymentService(TransactionRepository transactionRepository, PaymentRuleValidator ruleValidator,
-			PaymentProvider paymentProvider, ApplicationEventPublisher eventPublisher) {
+			PaymentProvider paymentProvider, ApplicationEventPublisher eventPublisher,
+			TransactionTemplate transactionTemplate) {
 		this.transactionRepository = transactionRepository;
 		this.ruleValidator = ruleValidator;
 		this.paymentProvider = paymentProvider;
 		this.eventPublisher = eventPublisher;
+		this.transactionTemplate = transactionTemplate;
 	}
 
-	@Transactional
 	public PaymentResponse process(Merchant merchant, CreatePaymentRequest request) {
 		return process(merchant, request, null).payment();
 	}
 
-	@Transactional
 	public PaymentOutcome process(Merchant merchant, CreatePaymentRequest request, String idempotencyKey) {
-		String requestHash = null;
-		if (idempotencyKey != null) {
-			requestHash = PaymentRequestHasher.hash(request);
-			Optional<Transaction> existing = transactionRepository
-				.findByMerchantIdAndIdempotencyKey(merchant.getId(), idempotencyKey);
-			if (existing.isPresent()) {
-				if (!existing.get().getRequestHash().equals(requestHash)) {
+		if (idempotencyKey == null) {
+			return transactionTemplate.execute((status) -> create(merchant, request, null, null));
+		}
+		String requestHash = PaymentRequestHasher.hash(request);
+		try {
+			return transactionTemplate.execute((status) -> replay(merchant, idempotencyKey, requestHash)
+				.orElseGet(() -> create(merchant, request, idempotencyKey, requestHash)));
+		}
+		catch (DataIntegrityViolationException ex) {
+			return transactionTemplate.execute((status) -> replay(merchant, idempotencyKey, requestHash))
+				.orElseThrow(() -> ex);
+		}
+	}
+
+	private Optional<PaymentOutcome> replay(Merchant merchant, String idempotencyKey, String requestHash) {
+		return transactionRepository.findByMerchantIdAndIdempotencyKey(merchant.getId(), idempotencyKey)
+			.map((existing) -> {
+				if (!existing.getRequestHash().equals(requestHash)) {
 					throw new IdempotencyKeyReusedException();
 				}
-				return new PaymentOutcome(PaymentResponse.from(existing.get()), true);
-			}
-		}
+				return new PaymentOutcome(PaymentResponse.from(existing), true);
+			});
+	}
 
+	private PaymentOutcome create(Merchant merchant, CreatePaymentRequest request, String idempotencyKey,
+			String requestHash) {
 		ruleValidator.validate(request.paymentMethod(), request.currency(), request.amount());
 
 		Transaction transaction = new Transaction();
@@ -79,7 +96,7 @@ public class PaymentService {
 		transaction.setCurrency(request.currency());
 		transaction.setPaymentMethod(request.paymentMethod());
 		transaction.setStatus(TransactionStatus.PENDING);
-		transaction = transactionRepository.save(transaction);
+		transaction = transactionRepository.saveAndFlush(transaction);
 
 		ProviderResult result = paymentProvider.process(new ProviderRequest(transaction.getId(),
 				transaction.getPaymentMethod(), transaction.getCurrency(), transaction.getAmount()));

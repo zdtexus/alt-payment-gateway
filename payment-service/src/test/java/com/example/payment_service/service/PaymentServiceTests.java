@@ -18,6 +18,8 @@ import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import com.example.payment_service.dto.CreatePaymentRequest;
 import com.example.payment_service.dto.PageResponse;
@@ -64,7 +66,7 @@ class PaymentServiceTests {
 	private final ApplicationEventPublisher eventPublisher = mock();
 
 	private final PaymentService paymentService = new PaymentService(transactionRepository, ruleValidator,
-			paymentProvider, eventPublisher);
+			paymentProvider, eventPublisher, new TransactionTemplate(mock(PlatformTransactionManager.class)));
 
 	private final Merchant merchant = new Merchant();
 
@@ -72,7 +74,7 @@ class PaymentServiceTests {
 
 	@BeforeEach
 	void assignIdOnSave() {
-		given(transactionRepository.save(any())).willAnswer((invocation) -> {
+		given(transactionRepository.saveAndFlush(any())).willAnswer((invocation) -> {
 			Transaction transaction = invocation.getArgument(0);
 			statusWhenSaved.set(transaction.getStatus());
 			transaction.setId(PAYMENT_ID);
@@ -114,7 +116,7 @@ class PaymentServiceTests {
 		paymentService.process(merchant, REQUEST);
 
 		ArgumentCaptor<Transaction> saved = ArgumentCaptor.forClass(Transaction.class);
-		verify(transactionRepository).save(saved.capture());
+		verify(transactionRepository).saveAndFlush(saved.capture());
 		assertThat(statusWhenSaved).hasValue(TransactionStatus.PENDING);
 		assertThat(saved.getValue().getMerchant()).isSameAs(merchant);
 		verify(paymentProvider)
