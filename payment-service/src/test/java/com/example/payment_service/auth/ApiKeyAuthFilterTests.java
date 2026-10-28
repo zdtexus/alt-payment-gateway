@@ -97,14 +97,15 @@ class ApiKeyAuthFilterTests {
 
 	@ParameterizedTest
 	@ValueSource(strings = { "/actuator", "/actuator/health", "/v3/api-docs", "/v3/api-docs/swagger-config",
-			"/swagger-ui/index.html", "/swagger-ui.html" })
+			"/swagger-ui/index.html", "/swagger-ui.html", "/api/v1/providers/http/webhook" })
 	void publicPathsDoNotRequireKey(String path) throws Exception {
 		mvc.perform(get(path)).andExpect(status().isOk()).andExpect(content().string("ok"));
 		verifyNoInteractions(merchantRepository);
 	}
 
 	@ParameterizedTest
-	@ValueSource(strings = { "/api/v1/actuator/health", "/actuator-admin" })
+	@ValueSource(strings = { "/api/v1/actuator/health", "/actuator-admin", "/api/v1/providers/http",
+			"/api/v1/providers/http/webhook/extra", "/api/v1/providers/http/payments" })
 	void similarPathsStillRequireKey(String path) throws Exception {
 		mvc.perform(get(path)).andExpect(status().isUnauthorized());
 	}
@@ -131,7 +132,9 @@ class ApiKeyAuthFilterTests {
 	static class TestController {
 
 		@GetMapping({ "/api/v1/test", "/actuator", "/actuator/health", "/v3/api-docs", "/v3/api-docs/swagger-config",
-				"/swagger-ui/index.html", "/swagger-ui.html", "/api/v1/actuator/health", "/actuator-admin" })
+				"/swagger-ui/index.html", "/swagger-ui.html", "/api/v1/actuator/health", "/actuator-admin",
+				"/api/v1/providers/http/webhook", "/api/v1/providers/http", "/api/v1/providers/http/webhook/extra",
+				"/api/v1/providers/http/payments" })
 		String ok() {
 			return "ok";
 		}

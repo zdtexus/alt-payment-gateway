@@ -147,6 +147,7 @@ Services are configured through environment variables. Defaults are suitable for
 | `PAYMENT_PROVIDER_HTTP_API_KEY` | payment-service | | Sent to the `http` provider as `Authorization: Bearer <key>` when set (`payment.provider.http.api-key`) |
 | `PAYMENT_PROVIDER_HTTP_CONNECT_TIMEOUT` | payment-service | `2s` | How long the `http` provider may take to accept the connection (`payment.provider.http.connect-timeout`) |
 | `PAYMENT_PROVIDER_HTTP_READ_TIMEOUT` | payment-service | `10s` | How long the `http` provider may take to answer (`payment.provider.http.read-timeout`). A payment whose provider doesn't answer in time stays `PENDING`. |
+| `PAYMENT_PROVIDER_HTTP_WEBHOOK_SECRET` | payment-service | | Shared secret the `http` provider signs its webhooks with, at least 16 characters (`payment.provider.http.webhook-secret`). Empty means the provider sends no webhooks (`404`). See [Provider webhooks](#provider-webhooks). |
 | `SMS_PROVIDER` | payment-service | `log` | SMS implementation: `log` or `http` |
 | `NOTIFICATION_SMS_HTTP_URL` | payment-service | | SMS gateway endpoint, required when `SMS_PROVIDER=http` |
 | `NOTIFICATION_SMS_HTTP_API_KEY` | payment-service | | Sent as `Authorization: Bearer <key>` when set |
@@ -159,10 +160,12 @@ Services are configured through environment variables. Defaults are suitable for
 | `RATE_LIMIT_BURST_CAPACITY` | api-gateway | `20` | Requests allowed at once before the per-second rate applies. At least `RATE_LIMIT_REPLENISH_RATE`. |
 | `RATE_LIMIT_IP_REPLENISH_RATE` | api-gateway | `20` | Requests per second one client IP may make on `/api/v1/**` across all API keys |
 | `RATE_LIMIT_IP_BURST_CAPACITY` | api-gateway | `40` | Requests one client IP may send at once. At least `RATE_LIMIT_IP_REPLENISH_RATE`. |
+| `RATE_LIMIT_WEBHOOK_REPLENISH_RATE` | api-gateway | `50` | Provider webhooks per second one client IP may send |
+| `RATE_LIMIT_WEBHOOK_BURST_CAPACITY` | api-gateway | `100` | Provider webhooks one client IP may send at once. At least `RATE_LIMIT_WEBHOOK_REPLENISH_RATE`. |
 
 With Docker Compose, put any of these in `.env` (see the commented examples in `.env.example`) and run `docker compose up -d` to apply them. Settings that are not set keep their defaults. `DB_URL`, `MAIL_HOST`, `MAIL_PORT`, `PAYMENT_SERVICE_URL`, `REDIS_HOST` and `REDIS_PORT` are fixed in `docker-compose.yml` to point at the containers.
 
-The gateway refuses to start when a rate limit is below 1 or its burst capacity is smaller than its replenish rate. The service refuses to start with invalid settings, for example a `PAYMENT_PROVIDER_DEFAULT` or route that names no registered provider, a payment method left without a provider, a missing or short `ADMIN_API_KEY`, a success rate outside `0.0`–`1.0`, a `fixed` outcome other than `approve`/`decline` or a blank decline reason, an `http` provider timeout that is zero or negative, an unknown SMS provider, or `SMS_PROVIDER=http` without a URL.
+The gateway refuses to start when a rate limit is below 1 or its burst capacity is smaller than its replenish rate. The service refuses to start with invalid settings, for example a `PAYMENT_PROVIDER_DEFAULT` or route that names no registered provider, a payment method left without a provider, a missing or short `ADMIN_API_KEY`, a success rate outside `0.0`–`1.0`, a `fixed` outcome other than `approve`/`decline` or a blank decline reason, an `http` provider timeout that is zero or negative, an `http` webhook secret shorter than 16 characters, an unknown SMS provider, or `SMS_PROVIDER=http` without a URL.
 
 ### SMS providers
 
@@ -183,7 +186,7 @@ Available providers:
   {"paymentId": "7f8e2a1c-4b3d-4e5f-9a6b-1c2d3e4f5a6b", "method": "CARD", "currency": "EUR", "amount": 49.90}
   ```
 
-  and expects `{"status": "APPROVED" | "DECLINED" | "PENDING", "reference": "...", "reason": "..."}` (`reason` is required for `DECLINED`, `reference` for `PENDING`). Any answer the service can't trust leaves the payment `PENDING` instead of declining it: no connection within the connect timeout, no answer within the read timeout, an error status, or an unknown or incomplete body. The provider may have charged in those cases, so declining would be wrong.
+  and expects `{"status": "APPROVED" | "DECLINED" | "PENDING", "reference": "...", "reason": "..."}` (`reason` is required for `DECLINED`, `reference` for `PENDING`). Any answer the service can't trust leaves the payment `PENDING` instead of declining it: no connection within the connect timeout, no answer within the read timeout, an error status, or an unknown or incomplete body. The provider may have charged in those cases, so declining would be wrong. The provider reports the final result later through a [webhook](#provider-webhooks).
 
 Each transaction stores the provider name and the provider's reference (see [Database](#database)). Both are internal: merchants don't see them in API responses, so providers and routes can change without affecting merchants.
 
@@ -288,9 +291,11 @@ In Swagger UI, the admin endpoints are listed under **Merchant administration** 
 
 ### Rate limiting
 
-The gateway limits `/api/v1/**` per API key with a token bucket stored in Redis. Each key may send `RATE_LIMIT_BURST_CAPACITY` requests at once (default 20), and the bucket refills at `RATE_LIMIT_REPLENISH_RATE` requests per second (default 10). Requests without an API key share a bucket per client IP. `/admin/**` and the API docs are not limited.
+The gateway limits `/api/v1/**` per API key with a token bucket stored in Redis. Each key may send `RATE_LIMIT_BURST_CAPACITY` requests at once (default 20), and the bucket refills at `RATE_LIMIT_REPLENISH_RATE` requests per second (default 10). Requests without an API key share a bucket per client IP. `/admin/**` and the API docs are not limited. Provider webhooks have their own limit (see below).
 
 A second, looser limit applies per client IP across all keys (`RATE_LIMIT_IP_BURST_CAPACITY`, default 40, refilled at `RATE_LIMIT_IP_REPLENISH_RATE`, default 20 per second). Without it, someone guessing keys could send a different key with every request and never be limited, because every unknown key starts with a full bucket. Only requests that pass their key's limit count against the IP limit, so a client retrying a key that is already limited doesn't use up the allowance of other merchants behind the same IP. The client IP is the address of the TCP connection; `X-Forwarded-For` is ignored because clients can set it freely.
+
+Provider webhooks (`/api/v1/providers/*/webhook`) carry no API key and come from a few provider servers, often in bursts, so they have their own route with only a per-IP limit (`RATE_LIMIT_WEBHOOK_BURST_CAPACITY`, default 100, refilled at `RATE_LIMIT_WEBHOOK_REPLENISH_RATE`, default 50 per second). It is kept apart from the merchant limits in both directions: webhooks never use a merchant's allowance, and merchant traffic from the same IP never blocks webhooks. A limited webhook gets `429` with `Retry-After`; providers retry webhooks that weren't accepted.
 
 The bucket is identified by a SHA-256 hash of the API key, so Redis never holds a merchant's key. Responses include `X-RateLimit-Remaining`, `X-RateLimit-Burst-Capacity` and `X-RateLimit-Replenish-Rate`. A request over the limit is rejected before it reaches `payment-service`, with `429` in the common error format and a `Retry-After` header giving the seconds until a request is allowed again:
 
@@ -327,7 +332,20 @@ Rate limiting fails open: if Redis can't be reached, requests go through without
 
 A payment is stored as `PENDING` and committed before its provider is called, then updated to `SUCCEEDED` or `DECLINED` in a second transaction, and only then is a receipt sent. Keeping the provider call out of the transaction means a slow provider holds no database connection or row lock.
 
-A payment stays `PENDING` when the provider's result is unknown, for example when the provider fails with an error. The merchant still gets `201` with status `PENDING` and the payment's `Location`. It gets no receipt, and is not charged again on an idempotent retry. Such payments are logged as errors and are not yet resolved automatically.
+A payment stays `PENDING` when the provider's result is unknown, for example when the provider fails with an error. The merchant still gets `201` with status `PENDING` and the payment's `Location`. It gets no receipt, and is not charged again on an idempotent retry. Such payments are logged as errors and are settled when the provider reports the result through a webhook.
+
+### Provider webhooks
+
+A provider that leaves a payment `PENDING` reports the final result later by calling `POST /api/v1/providers/{name}/webhook`. Only providers with a webhook secret accept webhooks; today that is `http` with `PAYMENT_PROVIDER_HTTP_WEBHOOK_SECRET` set. Other names get `404 PROVIDER_NOT_FOUND`. The endpoint needs no API key: it is authenticated by the signature, an HMAC-SHA256 of the exact raw body with the shared secret, sent as `X-Webhook-Signature: sha256=<hex>`. The body has the same fields as the provider's answer, plus an optional `paymentId`:
+
+```json
+{"paymentId": "7f8e2a1c-4b3d-4e5f-9a6b-1c2d3e4f5a6b", "status": "APPROVED", "reference": "acme_123"}
+```
+
+- The payment is found by the provider's `reference`. A payment that has no reference yet, for example because the provider timed out, is found by `paymentId`, if it belongs to that provider; the reference is then stored.
+- A `PENDING` payment moves to `SUCCEEDED` or `DECLINED` (with `reason`) and its receipt is sent then. A `PENDING` webhook only stores the reference.
+- A payment moves once. A repeated webhook, or one that contradicts the final status, changes nothing (the contradiction is logged) and still returns `204`, so the provider stops retrying. The webhook and the provider's own late answer can't both settle a payment: both lock the row and only change it while it is `PENDING`.
+- `204` means accepted. `401 INVALID_WEBHOOK_SIGNATURE` means a missing or wrong signature, `400 INVALID_WEBHOOK` a signed body that isn't a valid webhook (unknown status, decline without reason, no reference), and `404 PAYMENT_NOT_FOUND` no matching payment yet (the provider should retry).
 
 ### Errors
 
@@ -371,7 +389,7 @@ transactions   id, merchant_id, amount, currency, payment_method, status,
                provider, provider_reference
 ```
 
-Each transaction records which payment provider handled it (`provider`, for example `simulated`) and that provider's own transaction ID (`provider_reference`, empty if the provider returns none). Payments made before these columns existed are recorded as `simulated`.
+Each transaction records which payment provider handled it (`provider`, for example `simulated`) and that provider's own transaction ID (`provider_reference`, empty if the provider returns none). Payments made before these columns existed are recorded as `simulated`. An index on (`provider`, `provider_reference`) serves the webhook lookup.
 
 To reset the local database:
 
@@ -410,13 +428,13 @@ alt-payment-gateway/
 │   └── src/main/java/com/example/payment_service/
 │       ├── auth/             API key and admin key filters, key generation, @CurrentMerchant
 │       ├── config/           Web, async and OpenAPI configuration
-│       ├── controller/       REST endpoints
+│       ├── controller/       REST endpoints, including provider webhooks
 │       ├── dto/              Request and response bodies
 │       ├── entity/           JPA entities and enums
 │       ├── error/            Exceptions and the common error format
 │       ├── event/            PaymentProcessedEvent
 │       ├── notification/     Receipt listener, email and SMS senders
-│       ├── provider/         Payment provider interface, registry, per-method router, simulated, fixed and HTTP providers
+│       ├── provider/         Payment provider interface, registry, per-method router, simulated, fixed and HTTP providers, webhook contract
 │       ├── repository/       Spring Data repositories
 │       ├── rules/            Per-method currency and amount rules
 │       └── service/          Payment processing and merchant administration

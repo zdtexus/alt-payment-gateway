@@ -36,6 +36,12 @@ public class PaymentProviderRegistry {
 		return Optional.ofNullable(providers.get(name));
 	}
 
+	public Optional<WebhookProvider> findWebhookProvider(String name) {
+		return find(name).filter(WebhookProvider.class::isInstance)
+			.map(WebhookProvider.class::cast)
+			.filter(WebhookProvider::acceptsWebhooks);
+	}
+
 	public Set<String> names() {
 		return providers.keySet();
 	}

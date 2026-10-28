@@ -92,6 +92,29 @@ public class GlobalExceptionHandler {
 		return error(HttpStatus.UNPROCESSABLE_CONTENT, "IDEMPOTENCY_KEY_REUSED", ex.getMessage(), request);
 	}
 
+	@ExceptionHandler(WebhookNotAcceptedException.class)
+	ResponseEntity<ErrorResponse> handleWebhookNotAccepted(WebhookNotAcceptedException ex,
+			HttpServletRequest request) {
+		return error(HttpStatus.NOT_FOUND, "PROVIDER_NOT_FOUND", ex.getMessage(), request);
+	}
+
+	@ExceptionHandler(InvalidWebhookSignatureException.class)
+	ResponseEntity<ErrorResponse> handleInvalidWebhookSignature(InvalidWebhookSignatureException ex,
+			HttpServletRequest request) {
+		return error(HttpStatus.UNAUTHORIZED, "INVALID_WEBHOOK_SIGNATURE", ex.getMessage(), request);
+	}
+
+	@ExceptionHandler(InvalidWebhookException.class)
+	ResponseEntity<ErrorResponse> handleInvalidWebhook(InvalidWebhookException ex, HttpServletRequest request) {
+		return error(HttpStatus.BAD_REQUEST, "INVALID_WEBHOOK", ex.getMessage(), request);
+	}
+
+	@ExceptionHandler(WebhookPaymentNotFoundException.class)
+	ResponseEntity<ErrorResponse> handleWebhookPaymentNotFound(WebhookPaymentNotFoundException ex,
+			HttpServletRequest request) {
+		return error(HttpStatus.NOT_FOUND, "PAYMENT_NOT_FOUND", ex.getMessage(), request);
+	}
+
 	private static String errorSource(MethodParameter parameter, MessageSourceResolvable error) {
 		if (error instanceof FieldError fieldError) {
 			return fieldError.getField();

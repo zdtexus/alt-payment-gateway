@@ -31,6 +31,17 @@ class OpenApiDocsTests {
 	private MockMvc mvc;
 
 	@Test
+	void webhookEndpointHasNoApiKeySecurityAndDocumentsResponses() throws Exception {
+		String webhook = "$.paths['/api/v1/providers/{name}/webhook'].post";
+		mvc.perform(get("/v3/api-docs"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath(webhook + ".security", empty()))
+			.andExpect(jsonPath(webhook + ".tags", contains("Provider webhooks")))
+			.andExpect(jsonPath(webhook + ".parameters[*].name", hasItem("X-Webhook-Signature")))
+			.andExpect(jsonPath(webhook + ".responses.keys()", containsInAnyOrder("204", "400", "401", "404")));
+	}
+
+	@Test
 	void declaresApiKeyHeaderScheme() throws Exception {
 		mvc.perform(get("/v3/api-docs"))
 			.andExpect(status().isOk())

@@ -31,11 +31,13 @@ import com.example.payment_service.entity.Transaction;
 import com.example.payment_service.entity.TransactionStatus;
 import com.example.payment_service.error.PaymentNotFoundException;
 import com.example.payment_service.error.PaymentRuleViolationException;
+import com.example.payment_service.error.WebhookPaymentNotFoundException;
 import com.example.payment_service.event.PaymentProcessedEvent;
 import com.example.payment_service.provider.PaymentProvider;
 import com.example.payment_service.provider.PaymentProviderRouter;
 import com.example.payment_service.provider.ProviderRequest;
 import com.example.payment_service.provider.ProviderResult;
+import com.example.payment_service.provider.ProviderWebhook;
 import com.example.payment_service.repository.TransactionRepository;
 import com.example.payment_service.rules.PaymentRuleValidator;
 
@@ -91,7 +93,7 @@ class PaymentServiceTests {
 			statusWhenSaved.set(transaction.getStatus());
 			providerWhenSaved.set(transaction.getProvider());
 			transaction.setId(PAYMENT_ID);
-			given(transactionRepository.findById(PAYMENT_ID)).willReturn(Optional.of(transaction));
+			given(transactionRepository.findLockedById(PAYMENT_ID)).willReturn(Optional.of(transaction));
 			return transaction;
 		});
 	}
@@ -226,7 +228,7 @@ class PaymentServiceTests {
 		assertThat(response.processedAt()).isNull();
 		assertThat(savedTransaction().getStatus()).isEqualTo(TransactionStatus.PENDING);
 		verify(transactionManager, times(1)).commit(any());
-		verify(transactionRepository, never()).findById(any());
+		verify(transactionRepository, never()).findLockedById(any());
 		verifyNoInteractions(eventPublisher);
 	}
 
@@ -242,7 +244,7 @@ class PaymentServiceTests {
 		order.verify(transactionManager).commit(any());
 		order.verify(paymentProvider).process(any());
 		order.verify(transactionManager).getTransaction(any());
-		order.verify(transactionRepository).findById(PAYMENT_ID);
+		order.verify(transactionRepository).findLockedById(PAYMENT_ID);
 		order.verify(eventPublisher).publishEvent(any(Object.class));
 		order.verify(transactionManager).commit(any());
 	}
@@ -306,6 +308,105 @@ class PaymentServiceTests {
 		assertThatExceptionOfType(PaymentRuleViolationException.class)
 			.isThrownBy(() -> paymentService.process(merchant, REQUEST));
 		verifyNoInteractions(transactionRepository, providerRouter, paymentProvider, eventPublisher);
+	}
+
+	@Test
+	void providerAnswerDoesNotOverwritePaymentSettledMeanwhile() {
+		given(paymentProvider.process(any())).willAnswer((invocation) -> {
+			savedTransaction().setStatus(TransactionStatus.DECLINED);
+			return ProviderResult.approved("ref-1");
+		});
+
+		PaymentResponse response = paymentService.process(merchant, REQUEST);
+
+		assertThat(response.status()).isEqualTo(TransactionStatus.DECLINED);
+		assertThat(savedTransaction().getProviderReference()).isNull();
+		verifyNoInteractions(eventPublisher);
+	}
+
+	@Test
+	void webhookSettlesPendingPaymentFoundByReference() {
+		Transaction pending = pendingTransaction("ref-1");
+		given(transactionRepository.findLockedByProviderAndProviderReference("http", "ref-1"))
+			.willReturn(Optional.of(pending));
+
+		paymentService.settleFromWebhook("http", new ProviderWebhook(null, ProviderResult.approved("ref-1")));
+
+		assertThat(pending.getStatus()).isEqualTo(TransactionStatus.SUCCEEDED);
+		assertThat(pending.getProcessedAt()).isNotNull();
+		verify(eventPublisher).publishEvent(any(PaymentProcessedEvent.class));
+	}
+
+	@Test
+	void webhookFindsPaymentWithoutReferenceByPaymentIdAndStoresReference() {
+		Transaction pending = pendingTransaction(null);
+		given(transactionRepository.findLockedById(PAYMENT_ID)).willReturn(Optional.of(pending));
+
+		paymentService.settleFromWebhook("http",
+				new ProviderWebhook(PAYMENT_ID, ProviderResult.declined("Card expired", "ref-2")));
+
+		assertThat(pending.getStatus()).isEqualTo(TransactionStatus.DECLINED);
+		assertThat(pending.getDeclineReason()).isEqualTo("Card expired");
+		assertThat(pending.getProviderReference()).isEqualTo("ref-2");
+		verify(eventPublisher).publishEvent(any(PaymentProcessedEvent.class));
+	}
+
+	@Test
+	void webhookDoesNotMatchPaymentIdOfAnotherProviderOrReference() {
+		Transaction otherProvider = pendingTransaction(null);
+		otherProvider.setProvider("simulated");
+		given(transactionRepository.findLockedById(PAYMENT_ID)).willReturn(Optional.of(otherProvider));
+
+		assertThatExceptionOfType(WebhookPaymentNotFoundException.class)
+			.isThrownBy(() -> paymentService.settleFromWebhook("http",
+					new ProviderWebhook(PAYMENT_ID, ProviderResult.approved("ref-3"))))
+			.withMessage("No payment of provider 'http' matches reference 'ref-3'");
+
+		otherProvider.setProvider("http");
+		otherProvider.setProviderReference("ref-other");
+		assertThatExceptionOfType(WebhookPaymentNotFoundException.class)
+			.isThrownBy(() -> paymentService.settleFromWebhook("http",
+					new ProviderWebhook(PAYMENT_ID, ProviderResult.approved("ref-3"))));
+		assertThat(otherProvider.getStatus()).isEqualTo(TransactionStatus.PENDING);
+		verifyNoInteractions(eventPublisher);
+	}
+
+	@Test
+	void webhookForSettledPaymentChangesNothing() {
+		Transaction settled = pendingTransaction("ref-1");
+		settled.setStatus(TransactionStatus.SUCCEEDED);
+		given(transactionRepository.findLockedByProviderAndProviderReference("http", "ref-1"))
+			.willReturn(Optional.of(settled));
+
+		paymentService.settleFromWebhook("http",
+				new ProviderWebhook(null, ProviderResult.declined("Card expired", "ref-1")));
+
+		assertThat(settled.getStatus()).isEqualTo(TransactionStatus.SUCCEEDED);
+		assertThat(settled.getDeclineReason()).isNull();
+		verifyNoInteractions(eventPublisher);
+	}
+
+	@Test
+	void pendingWebhookKeepsPaymentPending() {
+		Transaction pending = pendingTransaction(null);
+		given(transactionRepository.findLockedById(PAYMENT_ID)).willReturn(Optional.of(pending));
+
+		paymentService.settleFromWebhook("http", new ProviderWebhook(PAYMENT_ID, ProviderResult.pending("ref-4")));
+
+		assertThat(pending.getStatus()).isEqualTo(TransactionStatus.PENDING);
+		assertThat(pending.getProviderReference()).isEqualTo("ref-4");
+		assertThat(pending.getProcessedAt()).isNull();
+		verifyNoInteractions(eventPublisher);
+	}
+
+	private Transaction pendingTransaction(String reference) {
+		merchant.setName("Demo Shop");
+		Transaction transaction = transaction();
+		transaction.setMerchant(merchant);
+		transaction.setStatus(TransactionStatus.PENDING);
+		transaction.setProvider("http");
+		transaction.setProviderReference(reference);
+		return transaction;
 	}
 
 	private static Transaction transaction() {

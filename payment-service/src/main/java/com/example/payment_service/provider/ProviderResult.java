@@ -4,6 +4,8 @@ public sealed interface ProviderResult {
 
 	int MAX_REFERENCE_LENGTH = 255;
 
+	String reference();
+
 	static ProviderResult approved() {
 		return new Approved(null);
 	}

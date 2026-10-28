@@ -83,6 +83,15 @@ class ProviderColumnsMigrationTests {
 				""", Integer.class)).isEqualTo(64);
 	}
 
+	@Test
+	void providerReferenceIsIndexedPerProviderForWebhookLookups() {
+		assertThat(jdbcTemplate.queryForObject("""
+				SELECT indexdef FROM pg_indexes
+				WHERE tablename = 'transactions' AND indexname = 'idx_transactions_provider_reference'
+				""", String.class)).contains("(provider, provider_reference)")
+			.contains("WHERE (provider_reference IS NOT NULL)");
+	}
+
 	private static void insertWithReference(String reference) {
 		jdbcTemplate.update("""
 				INSERT INTO transactions (id, merchant_id, amount, currency, payment_method, status, provider,

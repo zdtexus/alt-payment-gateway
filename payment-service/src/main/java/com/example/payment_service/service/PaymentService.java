@@ -25,11 +25,13 @@ import com.example.payment_service.entity.Transaction;
 import com.example.payment_service.entity.TransactionStatus;
 import com.example.payment_service.error.IdempotencyKeyReusedException;
 import com.example.payment_service.error.PaymentNotFoundException;
+import com.example.payment_service.error.WebhookPaymentNotFoundException;
 import com.example.payment_service.event.PaymentProcessedEvent;
 import com.example.payment_service.provider.PaymentProvider;
 import com.example.payment_service.provider.PaymentProviderRouter;
 import com.example.payment_service.provider.ProviderRequest;
 import com.example.payment_service.provider.ProviderResult;
+import com.example.payment_service.provider.ProviderWebhook;
 import com.example.payment_service.repository.TransactionRepository;
 import com.example.payment_service.rules.PaymentRuleValidator;
 
@@ -131,7 +133,53 @@ public class PaymentService {
 	}
 
 	private PaymentOutcome applyResult(UUID paymentId, ProviderResult result) {
-		Transaction transaction = transactionRepository.findById(paymentId).orElseThrow();
+		Transaction transaction = transactionRepository.findLockedById(paymentId).orElseThrow();
+		if (transaction.getStatus() == TransactionStatus.PENDING) {
+			settle(transaction, result);
+		}
+		else {
+			log.warn("Payment {} was already {} when its provider answered; the answer is ignored", paymentId,
+					transaction.getStatus());
+		}
+		return new PaymentOutcome(PaymentResponse.from(transaction), false);
+	}
+
+	public void settleFromWebhook(String provider, ProviderWebhook webhook) {
+		transactionTemplate.executeWithoutResult((status) -> {
+			String reference = webhook.result().reference();
+			Transaction transaction = transactionRepository
+				.findLockedByProviderAndProviderReference(provider, reference)
+				.or(() -> findUnreferencedPayment(provider, webhook.paymentId()))
+				.orElseThrow(() -> new WebhookPaymentNotFoundException(provider, reference));
+			if (transaction.getStatus() == TransactionStatus.PENDING) {
+				settle(transaction, webhook.result());
+			}
+			else if (!matches(transaction.getStatus(), webhook.result())) {
+				log.warn("Webhook from {} for payment {} reports {} but the payment is already {}; ignored",
+						provider, transaction.getId(), webhook.result().getClass().getSimpleName(),
+						transaction.getStatus());
+			}
+		});
+	}
+
+	private Optional<Transaction> findUnreferencedPayment(String provider, UUID paymentId) {
+		if (paymentId == null) {
+			return Optional.empty();
+		}
+		return transactionRepository.findLockedById(paymentId)
+			.filter((transaction) -> provider.equals(transaction.getProvider())
+					&& transaction.getProviderReference() == null);
+	}
+
+	private static boolean matches(TransactionStatus status, ProviderResult result) {
+		return switch (result) {
+			case ProviderResult.Approved approved -> status == TransactionStatus.SUCCEEDED;
+			case ProviderResult.Declined declined -> status == TransactionStatus.DECLINED;
+			case ProviderResult.Pending pending -> true;
+		};
+	}
+
+	private void settle(Transaction transaction, ProviderResult result) {
 		switch (result) {
 			case ProviderResult.Approved(String reference) -> {
 				transaction.setStatus(TransactionStatus.SUCCEEDED);
@@ -144,12 +192,11 @@ public class PaymentService {
 			}
 			case ProviderResult.Pending(String reference) -> {
 				transaction.setProviderReference(reference);
-				return new PaymentOutcome(PaymentResponse.from(transaction), false);
+				return;
 			}
 		}
 		transaction.setProcessedAt(Instant.now().truncatedTo(ChronoUnit.MICROS));
 		eventPublisher.publishEvent(PaymentProcessedEvent.from(transaction));
-		return new PaymentOutcome(PaymentResponse.from(transaction), false);
 	}
 
 	@Transactional(readOnly = true)

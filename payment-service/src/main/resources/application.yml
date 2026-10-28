@@ -38,6 +38,7 @@ payment:
       api-key: ${PAYMENT_PROVIDER_HTTP_API_KEY:}
       connect-timeout: ${PAYMENT_PROVIDER_HTTP_CONNECT_TIMEOUT:2s}
       read-timeout: ${PAYMENT_PROVIDER_HTTP_READ_TIMEOUT:10s}
+      webhook-secret: ${PAYMENT_PROVIDER_HTTP_WEBHOOK_SECRET:}
 
 notification:
   email:

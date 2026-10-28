@@ -32,7 +32,8 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
 	static final String MERCHANT_ATTRIBUTE = ApiKeyAuthFilter.class.getName() + ".merchant";
 
 	private static final List<PathPattern> SKIPPED_PATHS = Stream
-		.of("/actuator/**", "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html", "/admin/**")
+		.of("/actuator/**", "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html", "/admin/**",
+			"/api/v1/providers/*/webhook")
 		.map(PathPatternParser.defaultInstance::parse)
 		.toList();
 
