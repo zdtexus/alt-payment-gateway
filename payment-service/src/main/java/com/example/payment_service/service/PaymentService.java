@@ -5,6 +5,8 @@ import java.time.temporal.ChronoUnit;
 import java.util.Optional;
 import java.util.UUID;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
@@ -34,6 +36,8 @@ import com.example.payment_service.rules.PaymentRuleValidator;
 @Service
 public class PaymentService {
 
+	private static final Logger log = LoggerFactory.getLogger(PaymentService.class);
+
 	private static final Sort NEWEST_FIRST = Sort.by(Sort.Order.desc("createdAt"), Sort.Order.desc("id"));
 
 	private final TransactionRepository transactionRepository;
@@ -62,17 +66,25 @@ public class PaymentService {
 
 	public PaymentOutcome process(Merchant merchant, CreatePaymentRequest request, String idempotencyKey) {
 		if (idempotencyKey == null) {
-			return transactionTemplate.execute((status) -> create(merchant, request, null, null));
+			return callProvider(
+					transactionTemplate.execute((status) -> createPending(merchant, request, null, null)));
 		}
 		String requestHash = PaymentRequestHasher.hash(request);
+		Optional<PaymentOutcome> replayed = transactionTemplate
+			.execute((status) -> replay(merchant, idempotencyKey, requestHash));
+		if (replayed.isPresent()) {
+			return replayed.get();
+		}
+		PendingPayment pending;
 		try {
-			return transactionTemplate.execute((status) -> replay(merchant, idempotencyKey, requestHash)
-				.orElseGet(() -> create(merchant, request, idempotencyKey, requestHash)));
+			pending = transactionTemplate
+				.execute((status) -> createPending(merchant, request, idempotencyKey, requestHash));
 		}
 		catch (DataIntegrityViolationException ex) {
 			return transactionTemplate.execute((status) -> replay(merchant, idempotencyKey, requestHash))
 				.orElseThrow(() -> ex);
 		}
+		return callProvider(pending);
 	}
 
 	private Optional<PaymentOutcome> replay(Merchant merchant, String idempotencyKey, String requestHash) {
@@ -85,7 +97,7 @@ public class PaymentService {
 			});
 	}
 
-	private PaymentOutcome create(Merchant merchant, CreatePaymentRequest request, String idempotencyKey,
+	private PendingPayment createPending(Merchant merchant, CreatePaymentRequest request, String idempotencyKey,
 			String requestHash) {
 		ruleValidator.validate(request.paymentMethod(), request.currency(), request.amount());
 
@@ -99,10 +111,27 @@ public class PaymentService {
 		transaction.setStatus(TransactionStatus.PENDING);
 		PaymentProvider provider = providerRouter.providerFor(request.paymentMethod());
 		transaction.setProvider(provider.name());
-		transaction = transactionRepository.saveAndFlush(transaction);
+		return new PendingPayment(transactionRepository.saveAndFlush(transaction), provider);
+	}
 
-		ProviderResult result = provider.process(new ProviderRequest(transaction.getId(),
-				transaction.getPaymentMethod(), transaction.getCurrency(), transaction.getAmount()));
+	private PaymentOutcome callProvider(PendingPayment pending) {
+		Transaction transaction = pending.transaction();
+		ProviderResult result;
+		try {
+			result = pending.provider()
+				.process(new ProviderRequest(transaction.getId(), transaction.getPaymentMethod(),
+						transaction.getCurrency(), transaction.getAmount()));
+		}
+		catch (RuntimeException ex) {
+			log.error("Payment provider {} failed for payment {}; the payment stays PENDING",
+					pending.provider().name(), transaction.getId(), ex);
+			return new PaymentOutcome(PaymentResponse.from(transaction), false);
+		}
+		return transactionTemplate.execute((status) -> applyResult(transaction.getId(), result));
+	}
+
+	private PaymentOutcome applyResult(UUID paymentId, ProviderResult result) {
+		Transaction transaction = transactionRepository.findById(paymentId).orElseThrow();
 		switch (result) {
 			case ProviderResult.Approved(String reference) -> {
 				transaction.setStatus(TransactionStatus.SUCCEEDED);
@@ -137,6 +166,9 @@ public class PaymentService {
 				? transactionRepository.findByMerchantIdAndStatus(merchant.getId(), status, pageable)
 				: transactionRepository.findByMerchantId(merchant.getId(), pageable);
 		return PageResponse.from(transactions, PaymentResponse::from);
+	}
+
+	private record PendingPayment(Transaction transaction, PaymentProvider provider) {
 	}
 
 }

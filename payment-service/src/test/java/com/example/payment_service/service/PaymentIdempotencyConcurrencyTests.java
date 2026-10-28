@@ -1,7 +1,6 @@
 package com.example.payment_service.service;
 
 import java.math.BigDecimal;
-import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -24,6 +23,7 @@ import com.example.payment_service.auth.ApiKeyHasher;
 import com.example.payment_service.dto.CreatePaymentRequest;
 import com.example.payment_service.entity.Merchant;
 import com.example.payment_service.entity.PaymentMethod;
+import com.example.payment_service.entity.TransactionStatus;
 import com.example.payment_service.error.IdempotencyKeyReusedException;
 import com.example.payment_service.provider.SimulatedPaymentProvider;
 import com.example.payment_service.provider.ProviderResult;
@@ -78,17 +78,23 @@ class PaymentIdempotencyConcurrencyTests {
 	}
 
 	@Test
-	void concurrentRetriesCreateOnePaymentAndOneProviderCall() throws Exception {
+	void retryDuringProviderCallReturnsPendingPaymentWithoutCallingProviderAgain() throws Exception {
 		Future<PaymentOutcome> first = submit(request("49.90"));
 		assertThat(firstInProvider.await(10, TimeUnit.SECONDS)).isTrue();
-		Future<PaymentOutcome> retry = submit(request("49.90"));
-		Thread.sleep(500);
+
+		PaymentOutcome retry = submit(request("49.90")).get(5, TimeUnit.SECONDS);
+
+		assertThat(retry.replayed()).isTrue();
+		assertThat(retry.payment().status()).isEqualTo(TransactionStatus.PENDING);
 		releaseProvider.countDown();
+		PaymentOutcome original = first.get(10, TimeUnit.SECONDS);
+		assertThat(original.replayed()).isFalse();
+		assertThat(original.payment().id()).isEqualTo(retry.payment().id());
+		assertThat(original.payment().status()).isEqualTo(TransactionStatus.SUCCEEDED);
 
-		List<PaymentOutcome> outcomes = List.of(first.get(10, TimeUnit.SECONDS), retry.get(10, TimeUnit.SECONDS));
+		PaymentOutcome laterRetry = submit(request("49.90")).get(5, TimeUnit.SECONDS);
 
-		assertThat(outcomes).extracting(PaymentOutcome::replayed).containsExactly(false, true);
-		assertThat(outcomes.get(1).payment()).isEqualTo(outcomes.get(0).payment());
+		assertThat(laterRetry.payment()).isEqualTo(original.payment());
 		assertThat(transactionRepository.count()).isEqualTo(1);
 		then(paymentProvider).should(times(1)).process(any());
 	}

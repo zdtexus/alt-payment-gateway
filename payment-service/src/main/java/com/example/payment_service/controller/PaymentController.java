@@ -65,10 +65,12 @@ public class PaymentController {
 	@Operation(summary = "Create a payment",
 			description = "Validates the payment method rules, sends the payment to the provider and returns the result. "
 					+ "A declined payment is still created (201) with status DECLINED and a declineReason. "
+					+ "If the provider's result is unknown (for example the provider fails), the payment is created "
+					+ "(201) with status PENDING and no receipt. "
 					+ "The merchant gets an email and SMS receipt after the payment is stored. "
 					+ "Send an Idempotency-Key to make retries safe: a retry with the same key and body returns "
 					+ "the original payment without charging again, and a retry with a different body is rejected.")
-	@ApiResponse(responseCode = "201", description = "Payment processed (SUCCEEDED or DECLINED), or replayed",
+	@ApiResponse(responseCode = "201", description = "Payment created (SUCCEEDED, DECLINED, or PENDING when the result is unknown), or replayed",
 			headers = {
 					@Header(name = "Location", description = "Relative URL of the created payment",
 							schema = @Schema(example = "/api/v1/payments/7f8e2a1c-4b3d-4e5f-9a6b-1c2d3e4f5a6b")),

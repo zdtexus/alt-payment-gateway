@@ -11,6 +11,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
@@ -44,8 +45,10 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
@@ -68,8 +71,10 @@ class PaymentServiceTests {
 
 	private final ApplicationEventPublisher eventPublisher = mock();
 
+	private final PlatformTransactionManager transactionManager = mock();
+
 	private final PaymentService paymentService = new PaymentService(transactionRepository, ruleValidator,
-			providerRouter, eventPublisher, new TransactionTemplate(mock(PlatformTransactionManager.class)));
+			providerRouter, eventPublisher, new TransactionTemplate(transactionManager));
 
 	private final Merchant merchant = new Merchant();
 
@@ -86,6 +91,7 @@ class PaymentServiceTests {
 			statusWhenSaved.set(transaction.getStatus());
 			providerWhenSaved.set(transaction.getProvider());
 			transaction.setId(PAYMENT_ID);
+			given(transactionRepository.findById(PAYMENT_ID)).willReturn(Optional.of(transaction));
 			return transaction;
 		});
 	}
@@ -210,12 +216,35 @@ class PaymentServiceTests {
 	}
 
 	@Test
-	void providerFailurePublishesNothing() {
+	void providerFailureLeavesPaymentPendingAndPublishesNothing() {
 		given(paymentProvider.process(any())).willThrow(new IllegalStateException("Provider unreachable"));
 
-		assertThatExceptionOfType(IllegalStateException.class)
-			.isThrownBy(() -> paymentService.process(merchant, REQUEST));
+		PaymentResponse response = paymentService.process(merchant, REQUEST);
+
+		assertThat(response.id()).isEqualTo(PAYMENT_ID);
+		assertThat(response.status()).isEqualTo(TransactionStatus.PENDING);
+		assertThat(response.processedAt()).isNull();
+		assertThat(savedTransaction().getStatus()).isEqualTo(TransactionStatus.PENDING);
+		verify(transactionManager, times(1)).commit(any());
+		verify(transactionRepository, never()).findById(any());
 		verifyNoInteractions(eventPublisher);
+	}
+
+	@Test
+	void callsProviderBetweenTwoTransactions() {
+		given(paymentProvider.process(any())).willReturn(ProviderResult.approved());
+
+		paymentService.process(merchant, REQUEST);
+
+		InOrder order = inOrder(transactionManager, transactionRepository, paymentProvider, eventPublisher);
+		order.verify(transactionManager).getTransaction(any());
+		order.verify(transactionRepository).saveAndFlush(any());
+		order.verify(transactionManager).commit(any());
+		order.verify(paymentProvider).process(any());
+		order.verify(transactionManager).getTransaction(any());
+		order.verify(transactionRepository).findById(PAYMENT_ID);
+		order.verify(eventPublisher).publishEvent(any(Object.class));
+		order.verify(transactionManager).commit(any());
 	}
 
 	@Test

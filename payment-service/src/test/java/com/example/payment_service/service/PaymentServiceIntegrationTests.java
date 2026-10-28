@@ -1,6 +1,10 @@
 package com.example.payment_service.service;
 
 import java.math.BigDecimal;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+
+import javax.sql.DataSource;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -8,10 +12,12 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.context.event.ApplicationEvents;
 import org.springframework.test.context.event.RecordApplicationEvents;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import com.example.payment_service.TestcontainersConfiguration;
 import com.example.payment_service.auth.ApiKeyHasher;
@@ -24,6 +30,7 @@ import com.example.payment_service.entity.TransactionStatus;
 import com.example.payment_service.error.PaymentRuleViolationException;
 import com.example.payment_service.event.PaymentProcessedEvent;
 import com.example.payment_service.provider.SimulatedPaymentProvider;
+import com.example.payment_service.provider.ProviderRequest;
 import com.example.payment_service.provider.ProviderResult;
 import com.example.payment_service.repository.MerchantRepository;
 import com.example.payment_service.repository.TransactionRepository;
@@ -31,6 +38,7 @@ import com.example.payment_service.repository.TransactionRepository;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.BDDMockito.willAnswer;
 import static org.mockito.BDDMockito.willReturn;
 import static org.mockito.BDDMockito.willThrow;
 
@@ -53,6 +61,9 @@ class PaymentServiceIntegrationTests {
 
 	@Autowired
 	private ApplicationEvents events;
+
+	@Autowired
+	private DataSource dataSource;
 
 	@AfterEach
 	void deleteTransactions() {
@@ -121,14 +132,38 @@ class PaymentServiceIntegrationTests {
 	}
 
 	@Test
-	void providerFailureRollsBackPendingTransaction() {
+	void providerFailureLeavesCommittedPendingPayment() {
 		willThrow(new IllegalStateException("Provider unreachable")).given(paymentProvider).process(any());
 
-		assertThatExceptionOfType(IllegalStateException.class)
-			.isThrownBy(() -> paymentService.process(demoMerchant(), request("49.90", PaymentMethod.CARD)));
+		PaymentResponse response = paymentService.process(demoMerchant(), request("49.90", PaymentMethod.CARD));
 
-		assertThat(transactionRepository.count()).isZero();
+		assertThat(response.status()).isEqualTo(TransactionStatus.PENDING);
+		Transaction stored = transactionRepository.findById(response.id()).orElseThrow();
+		assertThat(stored.getStatus()).isEqualTo(TransactionStatus.PENDING);
+		assertThat(stored.getProvider()).isEqualTo("simulated");
+		assertThat(stored.getProviderReference()).isNull();
+		assertThat(stored.getProcessedAt()).isNull();
 		assertThat(events.stream(PaymentProcessedEvent.class)).isEmpty();
+	}
+
+	@Test
+	void providerIsCalledOutsideTransactionAfterPendingRowIsCommitted() {
+		AtomicBoolean transactionActive = new AtomicBoolean(true);
+		AtomicReference<TransactionStatus> committedStatus = new AtomicReference<>();
+		willAnswer((invocation) -> {
+			ProviderRequest providerRequest = invocation.getArgument(0);
+			transactionActive.set(TransactionSynchronizationManager.isActualTransactionActive());
+			committedStatus.set(new JdbcTemplate(dataSource).queryForObject(
+					"SELECT status FROM transactions WHERE id = ?", TransactionStatus.class,
+					providerRequest.paymentId()));
+			return ProviderResult.approved();
+		}).given(paymentProvider).process(any());
+
+		PaymentResponse response = paymentService.process(demoMerchant(), request("49.90", PaymentMethod.CARD));
+
+		assertThat(transactionActive).isFalse();
+		assertThat(committedStatus).hasValue(TransactionStatus.PENDING);
+		assertThat(response.status()).isEqualTo(TransactionStatus.SUCCEEDED);
 	}
 
 	private Merchant demoMerchant() {

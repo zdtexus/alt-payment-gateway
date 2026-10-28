@@ -34,7 +34,6 @@ import com.example.payment_service.repository.TransactionRepository;
 import com.example.payment_service.service.PaymentService;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.willAnswer;
@@ -128,12 +127,12 @@ class NotificationListenerIntegrationTests {
 	void providerFailureSendsNothing() {
 		willThrow(new IllegalStateException("Provider unreachable")).given(paymentProvider).process(any());
 
-		assertThatExceptionOfType(IllegalStateException.class).isThrownBy(() -> paymentService.process(demoMerchant(),
-				new CreatePaymentRequest(new BigDecimal("49.90"), "EUR", PaymentMethod.CARD)));
+		PaymentResponse response = paymentService.process(demoMerchant(),
+				new CreatePaymentRequest(new BigDecimal("49.90"), "EUR", PaymentMethod.CARD));
 
+		assertThat(response.status()).isEqualTo(TransactionStatus.PENDING);
 		verify(emailSender, after(1000).never()).send(any(), any(), any());
 		verify(smsSender, never()).send(any(), any());
-		assertThat(transactionRepository.count()).isZero();
 	}
 
 	@Test

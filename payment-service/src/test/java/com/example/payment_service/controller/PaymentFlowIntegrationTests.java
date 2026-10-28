@@ -36,6 +36,7 @@ import static org.hamcrest.Matchers.nullValue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.then;
 import static org.mockito.BDDMockito.willReturn;
+import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.times;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -159,6 +160,26 @@ class PaymentFlowIntegrationTests {
 			.andExpect(jsonPath("$.providerReference").doesNotExist());
 		mvc.perform(get("/api/v1/payments").param("status", "PENDING").header("X-API-Key", DEMO_KEY))
 			.andExpect(jsonPath("$.content[*].id", contains(id)));
+	}
+
+	@Test
+	void providerFailureCreatesPendingPayment() throws Exception {
+		willThrow(new IllegalStateException("Provider unreachable")).given(paymentProvider).process(any());
+
+		MvcResult created = mvc
+			.perform(post("/api/v1/payments").header("X-API-Key", DEMO_KEY)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(body("49.90", "EUR", "CARD")))
+			.andExpect(status().isCreated())
+			.andExpect(jsonPath("$.status").value("PENDING"))
+			.andExpect(jsonPath("$.processedAt").value(nullValue()))
+			.andReturn();
+		String id = idOf(created);
+
+		assertThat(created.getResponse().getHeader("Location")).isEqualTo("/api/v1/payments/" + id);
+		mvc.perform(get("/api/v1/payments/" + id).header("X-API-Key", DEMO_KEY))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.status").value("PENDING"));
 	}
 
 	@Test

@@ -180,7 +180,7 @@ To add a provider:
 
 1. Implement `PaymentProvider` in the `provider` package as a Spring `@Component`. `name()` returns a short unique name (at most 64 characters), for example `acme`. Startup fails if two providers share a name.
 2. Put its settings in a `@ConfigurationProperties("payment.provider.acme")` record, validated like `SimulatedPaymentProviderProperties`, and add any environment variables to this README and `.env.example`.
-3. Return `ProviderResult.approved(reference)` or `ProviderResult.declined(reason, reference)`, passing the provider's own transaction ID (at most 255 characters) when it has one. A thrown exception rolls the payment back and the merchant gets an error.
+3. Return `ProviderResult.approved(reference)` or `ProviderResult.declined(reason, reference)`, passing the provider's own transaction ID (at most 255 characters) when it has one. The provider is called outside any database transaction, after the `PENDING` payment is committed. A thrown exception counts as an unknown result: it is logged as an error with the payment ID, the payment stays `PENDING` with no receipt, and the merchant gets `201` with status `PENDING` (see [Payment statuses](#payment-statuses)).
 4. Route methods to it, for example `PAYMENT_PROVIDER_ROUTES_CRYPTO=acme`. Payment rules (currencies and limits per method) still apply before any provider is called.
 
 ## API
@@ -219,7 +219,7 @@ curl -X POST http://localhost:8080/api/v1/payments \
 ```
 
 - The first request processes the payment as usual.
-- A retry with the same key and the same body returns the original response (`201`, same payment and `Location`) with the header `Idempotent-Replayed: true`. The provider is not called again and no second receipt is sent. This also holds when the retry arrives while the first request is still being processed.
+- A retry with the same key and the same body returns the original response (`201`, same payment and `Location`) with the header `Idempotent-Replayed: true`. The provider is not called again and no second receipt is sent. A retry that arrives while the payment is still `PENDING` (the provider is still answering, or it failed) returns the payment as stored, with status `PENDING`, without waiting and without calling the provider again; fetch it with `GET` for its final status.
 - A retry with the same key and a different body is rejected with `422 IDEMPOTENCY_KEY_REUSED`. Amounts are compared by value, so `49.9` and `49.90` are the same.
 - Keys are scoped to the merchant and may be 1 to 255 characters long.
 - A request rejected with `400` or `422 PAYMENT_RULE_VIOLATION` stores nothing, so the key can be reused with a corrected body.
@@ -312,7 +312,11 @@ Rate limiting fails open: if Redis can't be reached, requests go through without
 | `CRYPTO` | EUR, USD | 1.00 | 5,000 |
 | `KVIK` | EUR, PLN | 0.50 | 2,000 |
 
-A payment starts as `PENDING` and ends as `SUCCEEDED` or `DECLINED`.
+### Payment statuses
+
+A payment is stored as `PENDING` and committed before its provider is called, then updated to `SUCCEEDED` or `DECLINED` in a second transaction, and only then is a receipt sent. Keeping the provider call out of the transaction means a slow provider holds no database connection or row lock.
+
+A payment stays `PENDING` when the provider's result is unknown, for example when the provider fails with an error. The merchant still gets `201` with status `PENDING` and the payment's `Location`. It gets no receipt, and is not charged again on an idempotent retry. Such payments are logged as errors and are not yet resolved automatically.
 
 ### Errors
 
