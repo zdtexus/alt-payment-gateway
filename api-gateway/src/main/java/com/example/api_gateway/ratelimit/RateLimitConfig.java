@@ -1,6 +1,9 @@
 package com.example.api_gateway.ratelimit;
 
+import io.lettuce.core.ClientOptions;
+
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.data.redis.autoconfigure.LettuceClientOptionsBuilderCustomizer;
 import org.springframework.cloud.gateway.filter.ratelimit.RedisRateLimiter;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -23,6 +26,11 @@ public class RateLimitConfig {
 		RedisRateLimiter limiter = new RedisRateLimiter(limit.replenishRate(), limit.burstCapacity(), 1);
 		limiter.setIncludeHeaders(false);
 		return limiter;
+	}
+
+	@Bean
+	LettuceClientOptionsBuilderCustomizer failFastWhenRedisIsDisconnected() {
+		return (builder) -> builder.disconnectedBehavior(ClientOptions.DisconnectedBehavior.REJECT_COMMANDS);
 	}
 
 }

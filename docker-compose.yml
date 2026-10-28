@@ -62,6 +62,7 @@ services:
       RATE_LIMIT_BURST_CAPACITY:
       RATE_LIMIT_IP_REPLENISH_RATE:
       RATE_LIMIT_IP_BURST_CAPACITY:
+      REDIS_TIMEOUT:
     ports:
       - "8080:8080"
     depends_on:

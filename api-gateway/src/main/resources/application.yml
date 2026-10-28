@@ -8,6 +8,8 @@ spring:
     redis:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
+      timeout: ${REDIS_TIMEOUT:250ms}
+      connect-timeout: ${REDIS_TIMEOUT:250ms}
       repositories:
         enabled: false
   cloud:
@@ -46,6 +48,10 @@ rate-limit:
   client-ip:
     replenish-rate: ${RATE_LIMIT_IP_REPLENISH_RATE:20}
     burst-capacity: ${RATE_LIMIT_IP_BURST_CAPACITY:40}
+
+logging:
+  level:
+    org.springframework.cloud.gateway.filter.ratelimit.RedisRateLimiter: "OFF"
 
 management:
   health:

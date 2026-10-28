@@ -146,6 +146,7 @@ Services are configured through environment variables. Defaults are suitable for
 | `PAYMENT_SERVICE_URL` | api-gateway | `http://localhost:8081` | Upstream payment service |
 | `REDIS_HOST` | api-gateway | `localhost` | Redis host |
 | `REDIS_PORT` | api-gateway | `6379` | Redis port |
+| `REDIS_TIMEOUT` | api-gateway | `250ms` | Redis connect and command timeout. Bounds how much a slow or hung Redis can delay a request. |
 | `RATE_LIMIT_REPLENISH_RATE` | api-gateway | `10` | Requests per second each API key (or client IP without a key) may make on `/api/v1/**` over time |
 | `RATE_LIMIT_BURST_CAPACITY` | api-gateway | `20` | Requests allowed at once before the per-second rate applies. At least `RATE_LIMIT_REPLENISH_RATE`. |
 | `RATE_LIMIT_IP_REPLENISH_RATE` | api-gateway | `20` | Requests per second one client IP may make on `/api/v1/**` across all API keys |
@@ -269,6 +270,16 @@ The bucket is identified by a SHA-256 hash of the API key, so Redis never holds 
   "path": "/api/v1/payments"
 }
 ```
+
+#### When Redis is down
+
+Rate limiting fails open: if Redis can't be reached, requests go through without a limit instead of failing, so a Redis outage never stops payments. The gateway keeps reporting `UP` on `/actuator/health`, because Redis is only needed for rate limiting.
+
+- **Redis stopped or unreachable:** requests are let through immediately. While the connection is down, the Redis client rejects commands at once instead of queuing them.
+- **Redis up but not answering:** each limiter gives up after `REDIS_TIMEOUT` (250 ms), so a request waits at most about 0.5 s extra (one per-key and one per-IP check).
+- **Redis back:** the client reconnects on its own and limiting resumes without a restart.
+- During an outage, responses carry `X-RateLimit-Remaining: -1`. Requests made during the outage are not counted.
+- The log shows the outage once per reconnect attempt (`Reconnecting…`, `Cannot reconnect…`, `Reconnected…`) instead of an error for every request. A Redis that is connected but not answering is not logged; it only shows as the extra delay.
 
 ### Payment methods
 
