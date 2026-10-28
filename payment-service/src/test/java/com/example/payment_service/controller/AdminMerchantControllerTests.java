@@ -14,6 +14,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
+import com.example.payment_service.dto.ApiKeyResponse;
 import com.example.payment_service.dto.CreateMerchantRequest;
 import com.example.payment_service.dto.CreatedMerchantResponse;
 import com.example.payment_service.dto.MerchantResponse;
@@ -179,6 +180,42 @@ class AdminMerchantControllerTests {
 	void updateStatusWithoutAdminKeyReturns401() throws Exception {
 		mvc.perform(patch("/admin/v1/merchants/" + MERCHANT_ID).contentType(MediaType.APPLICATION_JSON)
 			.content("{\"status\": \"ACTIVE\"}"))
+			.andExpect(status().isUnauthorized())
+			.andExpect(jsonPath("$.error").value("INVALID_ADMIN_KEY"));
+		verifyNoInteractions(merchantAdminService);
+	}
+
+	@Test
+	void rotateApiKeyReturns200WithNewKeyAndNoStore() throws Exception {
+		given(merchantAdminService.rotateApiKey(MERCHANT_ID)).willReturn(new ApiKeyResponse(MERCHANT_ID, NEW_KEY));
+
+		mvc.perform(post("/admin/v1/merchants/" + MERCHANT_ID + "/api-key").header("X-Admin-Key", ADMIN_KEY))
+			.andExpect(status().isOk())
+			.andExpect(header().string("Cache-Control", "no-store"))
+			.andExpect(jsonPath("$.merchantId").value(MERCHANT_ID.toString()))
+			.andExpect(jsonPath("$.apiKey").value(NEW_KEY));
+	}
+
+	@Test
+	void rotateApiKeyOfUnknownMerchantReturns404() throws Exception {
+		given(merchantAdminService.rotateApiKey(MERCHANT_ID)).willThrow(new MerchantNotFoundException(MERCHANT_ID));
+
+		mvc.perform(post("/admin/v1/merchants/" + MERCHANT_ID + "/api-key").header("X-Admin-Key", ADMIN_KEY))
+			.andExpect(status().isNotFound())
+			.andExpect(jsonPath("$.error").value("MERCHANT_NOT_FOUND"));
+	}
+
+	@Test
+	void rotateApiKeyWithInvalidIdReturns400() throws Exception {
+		mvc.perform(post("/admin/v1/merchants/not-a-uuid/api-key").header("X-Admin-Key", ADMIN_KEY))
+			.andExpect(status().isBadRequest())
+			.andExpect(jsonPath("$.message").value("id: invalid value"));
+		verifyNoInteractions(merchantAdminService);
+	}
+
+	@Test
+	void rotateApiKeyWithoutAdminKeyReturns401() throws Exception {
+		mvc.perform(post("/admin/v1/merchants/" + MERCHANT_ID + "/api-key").header("X-API-Key", "demo-key-123"))
 			.andExpect(status().isUnauthorized())
 			.andExpect(jsonPath("$.error").value("INVALID_ADMIN_KEY"));
 		verifyNoInteractions(merchantAdminService);

@@ -7,6 +7,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.example.payment_service.auth.ApiKeyGenerator;
 import com.example.payment_service.auth.ApiKeyHasher;
+import com.example.payment_service.dto.ApiKeyResponse;
 import com.example.payment_service.dto.CreateMerchantRequest;
 import com.example.payment_service.dto.CreatedMerchantResponse;
 import com.example.payment_service.dto.MerchantResponse;
@@ -38,9 +39,21 @@ public class MerchantAdminService {
 
 	@Transactional
 	public MerchantResponse updateStatus(UUID id, MerchantStatus status) {
-		Merchant merchant = merchantRepository.findById(id).orElseThrow(() -> new MerchantNotFoundException(id));
+		Merchant merchant = findMerchant(id);
 		merchant.setStatus(status);
 		return MerchantResponse.from(merchant);
+	}
+
+	@Transactional
+	public ApiKeyResponse rotateApiKey(UUID id) {
+		Merchant merchant = findMerchant(id);
+		String apiKey = ApiKeyGenerator.generate();
+		merchant.setApiKeyHash(ApiKeyHasher.hash(apiKey));
+		return new ApiKeyResponse(merchant.getId(), apiKey);
+	}
+
+	private Merchant findMerchant(UUID id) {
+		return merchantRepository.findById(id).orElseThrow(() -> new MerchantNotFoundException(id));
 	}
 
 }

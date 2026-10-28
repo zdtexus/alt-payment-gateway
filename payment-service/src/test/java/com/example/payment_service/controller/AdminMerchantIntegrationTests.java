@@ -124,6 +124,53 @@ class AdminMerchantIntegrationTests {
 			.andExpect(jsonPath("$.message").value("Merchant " + unknownId + " not found"));
 	}
 
+	@Test
+	void rotatedKeyReplacesOldKeyAtOnce() throws Exception {
+		String body = createMerchant("{\"name\": \"Acme Store\"}");
+		String id = JsonPath.read(body, "$.id");
+		String oldKey = JsonPath.read(body, "$.apiKey");
+
+		String rotated = rotateApiKey(id).andExpect(status().isOk())
+			.andExpect(jsonPath("$.merchantId").value(id))
+			.andReturn()
+			.getResponse()
+			.getContentAsString();
+		String newKey = JsonPath.read(rotated, "$.apiKey");
+
+		assertThat(newKey).isNotEqualTo(oldKey).hasSize(43);
+		assertThat(merchantRepository.findById(UUID.fromString(id)).orElseThrow().getApiKeyHash())
+			.isEqualTo(ApiKeyHasher.hash(newKey));
+		mvc.perform(get("/api/v1/payments").header("X-API-Key", oldKey))
+			.andExpect(status().isUnauthorized())
+			.andExpect(jsonPath("$.error").value("INVALID_API_KEY"));
+		mvc.perform(get("/api/v1/payments").header("X-API-Key", newKey)).andExpect(status().isOk());
+	}
+
+	@Test
+	void rotatingKeyOfSuspendedMerchantKeepsItSuspended() throws Exception {
+		String id = JsonPath.read(createMerchant("{\"name\": \"Acme Store\"}"), "$.id");
+		updateStatus(id, "SUSPENDED").andExpect(status().isOk());
+
+		String newKey = JsonPath.read(rotateApiKey(id).andExpect(status().isOk())
+			.andReturn()
+			.getResponse()
+			.getContentAsString(), "$.apiKey");
+
+		mvc.perform(get("/api/v1/payments").header("X-API-Key", newKey))
+			.andExpect(status().isForbidden())
+			.andExpect(jsonPath("$.error").value("MERCHANT_SUSPENDED"));
+	}
+
+	@Test
+	void rotatingKeyOfUnknownMerchantReturns404() throws Exception {
+		rotateApiKey(UUID.randomUUID().toString()).andExpect(status().isNotFound())
+			.andExpect(jsonPath("$.error").value("MERCHANT_NOT_FOUND"));
+	}
+
+	private ResultActions rotateApiKey(String id) throws Exception {
+		return mvc.perform(post("/admin/v1/merchants/" + id + "/api-key").header("X-Admin-Key", ADMIN_KEY));
+	}
+
 	private ResultActions updateStatus(String id, String status) throws Exception {
 		return mvc.perform(patch("/admin/v1/merchants/" + id).header("X-Admin-Key", ADMIN_KEY)
 			.contentType(MediaType.APPLICATION_JSON)

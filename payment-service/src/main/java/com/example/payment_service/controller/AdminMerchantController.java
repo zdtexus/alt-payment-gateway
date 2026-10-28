@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.example.payment_service.dto.ApiKeyResponse;
 import com.example.payment_service.dto.CreateMerchantRequest;
 import com.example.payment_service.dto.CreatedMerchantResponse;
 import com.example.payment_service.dto.MerchantResponse;
@@ -41,6 +42,11 @@ public class AdminMerchantController {
 	public MerchantResponse updateStatus(@PathVariable UUID id,
 			@Valid @RequestBody UpdateMerchantStatusRequest request) {
 		return merchantAdminService.updateStatus(id, request.status());
+	}
+
+	@PostMapping("/{id}/api-key")
+	public ResponseEntity<ApiKeyResponse> rotateApiKey(@PathVariable UUID id) {
+		return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(merchantAdminService.rotateApiKey(id));
 	}
 
 }
