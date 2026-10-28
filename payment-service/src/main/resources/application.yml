@@ -22,6 +22,9 @@ spring:
       "[mail.smtp.timeout]": ${MAIL_TIMEOUT_MS:5000}
       "[mail.smtp.writetimeout]": ${MAIL_TIMEOUT_MS:5000}
 
+admin:
+  api-key: ${ADMIN_API_KEY:}
+
 payment:
   provider:
     success-rate: ${PAYMENT_PROVIDER_SUCCESS_RATE:0.9}

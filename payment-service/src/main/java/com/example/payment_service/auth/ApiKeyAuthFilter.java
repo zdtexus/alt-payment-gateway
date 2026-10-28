@@ -31,8 +31,8 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
 
 	static final String MERCHANT_ATTRIBUTE = ApiKeyAuthFilter.class.getName() + ".merchant";
 
-	private static final List<PathPattern> PUBLIC_PATHS = Stream
-		.of("/actuator/**", "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html")
+	private static final List<PathPattern> SKIPPED_PATHS = Stream
+		.of("/actuator/**", "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html", "/admin/**")
 		.map(PathPatternParser.defaultInstance::parse)
 		.toList();
 
@@ -49,7 +49,7 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
 	@Override
 	protected boolean shouldNotFilter(HttpServletRequest request) {
 		PathContainer path = PathContainer.parsePath(request.getRequestURI());
-		return PUBLIC_PATHS.stream().anyMatch((pattern) -> pattern.matches(path));
+		return SKIPPED_PATHS.stream().anyMatch((pattern) -> pattern.matches(path));
 	}
 
 	@Override

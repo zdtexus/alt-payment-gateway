@@ -29,7 +29,7 @@ Client ──► api-gateway :8080 ──(/api/v1/**)──► payment-service :
 
 | Component | Port | Description |
 |---|---|---|
-| `api-gateway` | 8080 | Public entry point. Routes `/api/v1/**` and the API docs to `payment-service`. Contains no business logic. |
+| `api-gateway` | 8080 | Public entry point. Routes `/api/v1/**`, `/admin/**` and the API docs to `payment-service`. Contains no business logic. |
 | `payment-service` | 8081 | Payment processing, validation, persistence and notifications. Reachable only through the gateway. |
 | `postgres` | 5432 | Primary database. |
 | `mailpit` | 1025, 8025 | Local SMTP server with a web inbox for development. |
@@ -89,11 +89,11 @@ If you prefer to run the services from your IDE, start only the database and mai
 docker compose up -d postgres mailpit
 ```
 
-Then start each service in its own terminal:
+Then start each service in its own terminal. `payment-service` needs an admin key:
 
 ```bash
 cd payment-service
-./mvnw spring-boot:run
+ADMIN_API_KEY=local-admin-key-change-me ./mvnw spring-boot:run
 ```
 
 ```bash
@@ -101,7 +101,7 @@ cd api-gateway
 ./mvnw spring-boot:run
 ```
 
-On Windows, use `mvnw.cmd` instead of `./mvnw`.
+On Windows, use `mvnw.cmd` instead of `./mvnw`, and set the key first with `set ADMIN_API_KEY=...` (cmd) or `$env:ADMIN_API_KEY="..."` (PowerShell).
 
 Once running, the following are available:
 
@@ -128,6 +128,7 @@ Services are configured through environment variables. Defaults are suitable for
 
 | Variable | Service | Default | Description |
 |---|---|---|---|
+| `ADMIN_API_KEY` | payment-service | | **Required.** Admin key for `/admin/**`, sent as `X-Admin-Key`. At least 16 characters. |
 | `DB_URL` | payment-service | `jdbc:postgresql://localhost:5432/payments` | JDBC connection URL |
 | `DB_USER` | payment-service | `payments` | Database user |
 | `DB_PASSWORD` | payment-service | `payments` | Database password |
@@ -144,7 +145,7 @@ Services are configured through environment variables. Defaults are suitable for
 
 With Docker Compose, put any of these in `.env` (see the commented examples in `.env.example`) and run `docker compose up -d` to apply them. Settings that are not set keep their defaults. `DB_URL`, `MAIL_HOST` and `MAIL_PORT` are fixed in `docker-compose.yml` to point at the containers.
 
-The service refuses to start with invalid settings, for example a success rate outside `0.0`–`1.0`, an unknown SMS provider, or `SMS_PROVIDER=http` without a URL.
+The service refuses to start with invalid settings, for example a missing or short `ADMIN_API_KEY`, a success rate outside `0.0`–`1.0`, an unknown SMS provider, or `SMS_PROVIDER=http` without a URL.
 
 ### SMS providers
 
@@ -218,6 +219,7 @@ Errors are returned in a common format:
 |---|---|---|
 | 400 | `VALIDATION_FAILED` | Malformed request body, invalid field, or invalid `id`, `status`, `page`, `size` or `Idempotency-Key` |
 | 401 | `INVALID_API_KEY` | Missing or unknown API key |
+| 401 | `INVALID_ADMIN_KEY` | Missing or wrong `X-Admin-Key` on an `/admin/**` path |
 | 403 | `MERCHANT_SUSPENDED` | Merchant account is suspended |
 | 404 | `PAYMENT_NOT_FOUND` | Payment does not exist or belongs to another merchant |
 | 422 | `PAYMENT_RULE_VIOLATION` | Amount or currency not allowed for the payment method |

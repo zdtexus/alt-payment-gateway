@@ -60,6 +60,11 @@ public class GlobalExceptionHandler {
 		return error(HttpStatus.UNAUTHORIZED, "INVALID_API_KEY", ex.getMessage(), request);
 	}
 
+	@ExceptionHandler(InvalidAdminKeyException.class)
+	ResponseEntity<ErrorResponse> handleInvalidAdminKey(InvalidAdminKeyException ex, HttpServletRequest request) {
+		return error(HttpStatus.UNAUTHORIZED, "INVALID_ADMIN_KEY", ex.getMessage(), request);
+	}
+
 	@ExceptionHandler(MerchantSuspendedException.class)
 	ResponseEntity<ErrorResponse> handleMerchantSuspended(MerchantSuspendedException ex, HttpServletRequest request) {
 		return error(HttpStatus.FORBIDDEN, "MERCHANT_SUSPENDED", ex.getMessage(), request);

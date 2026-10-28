@@ -63,6 +63,24 @@ class GatewayForwardingTests {
 		assertThat(request.getHeader("X-API-Key")).isEqualTo(API_KEY);
 	}
 
+	@Test
+	void forwardsAdminKeyHeaderToPaymentService() throws InterruptedException {
+		upstream.enqueue(new MockResponse().setResponseCode(201));
+
+		client().post()
+			.uri("/admin/v1/merchants")
+			.header("X-Admin-Key", "test-admin-key")
+			.exchange()
+			.expectStatus()
+			.isCreated();
+
+		RecordedRequest request = upstream.takeRequest(5, TimeUnit.SECONDS);
+		assertThat(request).isNotNull();
+		assertThat(request.getMethod()).isEqualTo("POST");
+		assertThat(request.getPath()).isEqualTo("/admin/v1/merchants");
+		assertThat(request.getHeader("X-Admin-Key")).isEqualTo("test-admin-key");
+	}
+
 	@ParameterizedTest
 	@CsvSource({ "/api/v1/payments, 201", "/api/v1/payments/42, 401", "/api/v1/payments/42, 403",
 			"/api/v1/payments/42, 404", "/api/v1/payments, 422", "/api/v1/payments, 500", "/v3/api-docs, 404" })

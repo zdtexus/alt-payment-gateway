@@ -12,7 +12,7 @@ spring:
             - id: payment-service
               uri: ${PAYMENT_SERVICE_URL:http://localhost:8081}
               predicates:
-                - Path=/api/v1/**
+                - Path=/api/v1/**,/admin/**
             - id: payment-service-docs
               uri: ${PAYMENT_SERVICE_URL:http://localhost:8081}
               predicates:
