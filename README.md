@@ -8,6 +8,7 @@ The system consists of an API gateway and a payment service, backed by PostgreSQ
 
 - Single entry point through Spring Cloud Gateway
 - API key authentication with strict per-merchant data isolation
+- Safe retries with the `Idempotency-Key` header, so a retried payment is never charged twice
 - Multiple payment methods with per-method currency and amount rules
 - Simulated payment provider with configurable success rate and latency
 - Asynchronous email and SMS receipts, sent only after the payment is committed
@@ -173,6 +174,21 @@ A successful request returns `201 Created` with a relative `Location` header, fo
 
 The full API reference is available in Swagger UI.
 
+### Idempotent requests
+
+A network error can leave the client unsure whether a payment was created. To retry safely, send an `Idempotency-Key` header with a value unique to the payment, for example the order ID:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/payments   -H "X-API-Key: demo-key-123"   -H "Idempotency-Key: order-1001"   -H "Content-Type: application/json"   -d '{"amount": 49.90, "currency": "EUR", "paymentMethod": "CARD"}'
+```
+
+- The first request processes the payment as usual.
+- A retry with the same key and the same body returns the original response (`201`, same payment and `Location`) with the header `Idempotent-Replayed: true`. The provider is not called again and no second receipt is sent. This also holds when the retry arrives while the first request is still being processed.
+- A retry with the same key and a different body is rejected with `422 IDEMPOTENCY_KEY_REUSED`. Amounts are compared by value, so `49.9` and `49.90` are the same.
+- Keys are scoped to the merchant and may be 1 to 255 characters long.
+- A request rejected with `400` or `422 PAYMENT_RULE_VIOLATION` stores nothing, so the key can be reused with a corrected body.
+- Requests without the header are processed every time.
+
 ### Payment methods
 
 | Method | Currencies | Minimum | Maximum |
@@ -200,11 +216,12 @@ Errors are returned in a common format:
 
 | Status | Error | Cause |
 |---|---|---|
-| 400 | `VALIDATION_FAILED` | Malformed request body, invalid field, or invalid `id`, `status`, `page` or `size` |
+| 400 | `VALIDATION_FAILED` | Malformed request body, invalid field, or invalid `id`, `status`, `page`, `size` or `Idempotency-Key` |
 | 401 | `INVALID_API_KEY` | Missing or unknown API key |
 | 403 | `MERCHANT_SUSPENDED` | Merchant account is suspended |
 | 404 | `PAYMENT_NOT_FOUND` | Payment does not exist or belongs to another merchant |
 | 422 | `PAYMENT_RULE_VIOLATION` | Amount or currency not allowed for the payment method |
+| 422 | `IDEMPOTENCY_KEY_REUSED` | `Idempotency-Key` already used with a different request body |
 | 502 | `BAD_GATEWAY` | Returned by the gateway when `payment-service` drops the connection |
 | 503 | `SERVICE_UNAVAILABLE` | Returned by the gateway when `payment-service` cannot be reached |
 
@@ -217,7 +234,8 @@ API keys are never stored. The database keeps only their SHA-256 hash (`api_key_
 ```text
 merchants      id, name, api_key_hash, email, phone, status
 transactions   id, merchant_id, amount, currency, payment_method, status,
-               decline_reason, created_at, processed_at
+               decline_reason, created_at, processed_at,
+               idempotency_key, request_hash
 ```
 
 To reset the local database:

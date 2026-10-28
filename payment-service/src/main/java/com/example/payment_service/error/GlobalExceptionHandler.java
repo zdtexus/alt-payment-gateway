@@ -4,11 +4,15 @@ import java.util.stream.Collectors;
 
 import jakarta.servlet.http.HttpServletRequest;
 
+import org.springframework.context.MessageSourceResolvable;
+import org.springframework.core.MethodParameter;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
@@ -34,7 +38,7 @@ public class GlobalExceptionHandler {
 			.stream()
 			.flatMap((result) -> result.getResolvableErrors()
 				.stream()
-				.map((error) -> result.getMethodParameter().getParameterName() + ": " + error.getDefaultMessage()))
+				.map((error) -> errorSource(result.getMethodParameter(), error) + ": " + error.getDefaultMessage()))
 			.sorted()
 			.collect(Collectors.joining("; "));
 		return validationFailed(message, request);
@@ -76,6 +80,17 @@ public class GlobalExceptionHandler {
 	ResponseEntity<ErrorResponse> handleIdempotencyKeyReused(IdempotencyKeyReusedException ex,
 			HttpServletRequest request) {
 		return error(HttpStatus.UNPROCESSABLE_CONTENT, "IDEMPOTENCY_KEY_REUSED", ex.getMessage(), request);
+	}
+
+	private static String errorSource(MethodParameter parameter, MessageSourceResolvable error) {
+		if (error instanceof FieldError fieldError) {
+			return fieldError.getField();
+		}
+		RequestHeader header = parameter.getParameterAnnotation(RequestHeader.class);
+		if (header != null && !header.name().isEmpty()) {
+			return header.name();
+		}
+		return parameter.getParameterName();
 	}
 
 	private static ResponseEntity<ErrorResponse> validationFailed(String message, HttpServletRequest request) {

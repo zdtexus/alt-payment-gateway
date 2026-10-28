@@ -66,8 +66,16 @@ class OpenApiDocsTests {
 			.andExpect(jsonPath(create + ".responses['201'].headers.Location").exists())
 			.andExpect(jsonPath(create + ".responses['201'].content['application/json'].schema['$ref']")
 				.value("#/components/schemas/PaymentResponse"))
-			.andExpect(jsonPath(create + ".responses['422'].content['application/json'].example.message")
+			.andExpect(jsonPath(create + ".responses['201'].headers['Idempotent-Replayed']").exists())
+			.andExpect(jsonPath(create + ".parameters[?(@.name == 'Idempotency-Key')].in").value("header"))
+			.andExpect(jsonPath(create + ".parameters[?(@.name == 'Idempotency-Key')].required").value(false))
+			.andExpect(jsonPath(create + ".parameters[?(@.name == 'Idempotency-Key')].schema.maxLength").value(255))
+			.andExpect(jsonPath(create
+					+ ".responses['422'].content['application/json'].examples.PAYMENT_RULE_VIOLATION.value.message")
 				.value("Amount 600.00 exceeds BONUS limit 500.00"))
+			.andExpect(jsonPath(create
+					+ ".responses['422'].content['application/json'].examples.IDEMPOTENCY_KEY_REUSED.value.error")
+				.value("IDEMPOTENCY_KEY_REUSED"))
 			.andExpect(jsonPath("$.components.schemas.CreatePaymentRequest.properties.currency.example").value("EUR"))
 			.andExpect(jsonPath("$.components.schemas.CreatePaymentRequest.properties.paymentMethod.example")
 				.value("CARD"));

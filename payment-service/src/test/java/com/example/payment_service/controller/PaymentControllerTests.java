@@ -25,13 +25,16 @@ import com.example.payment_service.entity.Merchant;
 import com.example.payment_service.entity.MerchantStatus;
 import com.example.payment_service.entity.PaymentMethod;
 import com.example.payment_service.entity.TransactionStatus;
+import com.example.payment_service.error.IdempotencyKeyReusedException;
 import com.example.payment_service.error.PaymentNotFoundException;
 import com.example.payment_service.error.PaymentRuleViolationException;
 import com.example.payment_service.repository.MerchantRepository;
+import com.example.payment_service.service.PaymentOutcome;
 import com.example.payment_service.service.PaymentService;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.ArgumentMatchers.same;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.verify;
@@ -75,8 +78,8 @@ class PaymentControllerTests {
 
 	@Test
 	void createReturns201WithLocation() throws Exception {
-		given(paymentService.process(same(merchant), eq(VALID_REQUEST)))
-			.willReturn(payment(TransactionStatus.SUCCEEDED, null));
+		given(paymentService.process(same(merchant), eq(VALID_REQUEST), isNull()))
+			.willReturn(new PaymentOutcome(payment(TransactionStatus.SUCCEEDED, null), false));
 
 		mvc.perform(post("/api/v1/payments").header("X-API-Key", API_KEY)
 			.contentType(MediaType.APPLICATION_JSON)
@@ -84,13 +87,79 @@ class PaymentControllerTests {
 			.andExpect(status().isCreated())
 			.andExpect(header().string("Location", "/api/v1/payments/" + PAYMENT_ID))
 			.andExpect(jsonPath("$.id").value(PAYMENT_ID.toString()))
-			.andExpect(jsonPath("$.status").value("SUCCEEDED"));
+			.andExpect(jsonPath("$.status").value("SUCCEEDED"))
+			.andExpect(header().doesNotExist("Idempotent-Replayed"));
+	}
+
+	@Test
+	void idempotencyKeyIsPassedToService() throws Exception {
+		given(paymentService.process(same(merchant), eq(VALID_REQUEST), eq("order-1001")))
+			.willReturn(new PaymentOutcome(payment(TransactionStatus.SUCCEEDED, null), false));
+
+		mvc.perform(post("/api/v1/payments").header("X-API-Key", API_KEY)
+			.header("Idempotency-Key", "order-1001")
+			.contentType(MediaType.APPLICATION_JSON)
+			.content(VALID_BODY))
+			.andExpect(status().isCreated())
+			.andExpect(header().doesNotExist("Idempotent-Replayed"));
+	}
+
+	@Test
+	void replayReturnsSame201WithReplayedHeader() throws Exception {
+		given(paymentService.process(same(merchant), eq(VALID_REQUEST), eq("order-1001")))
+			.willReturn(new PaymentOutcome(payment(TransactionStatus.SUCCEEDED, null), true));
+
+		mvc.perform(post("/api/v1/payments").header("X-API-Key", API_KEY)
+			.header("Idempotency-Key", "order-1001")
+			.contentType(MediaType.APPLICATION_JSON)
+			.content(VALID_BODY))
+			.andExpect(status().isCreated())
+			.andExpect(header().string("Location", "/api/v1/payments/" + PAYMENT_ID))
+			.andExpect(header().string("Idempotent-Replayed", "true"))
+			.andExpect(jsonPath("$.id").value(PAYMENT_ID.toString()));
+	}
+
+	@Test
+	void keyOf255CharactersIsAccepted() throws Exception {
+		String key = "k".repeat(255);
+		given(paymentService.process(same(merchant), eq(VALID_REQUEST), eq(key)))
+			.willReturn(new PaymentOutcome(payment(TransactionStatus.SUCCEEDED, null), false));
+
+		mvc.perform(post("/api/v1/payments").header("X-API-Key", API_KEY)
+			.header("Idempotency-Key", key)
+			.contentType(MediaType.APPLICATION_JSON)
+			.content(VALID_BODY)).andExpect(status().isCreated());
+	}
+
+	@ParameterizedTest
+	@ValueSource(ints = { 0, 256 })
+	void keyOfInvalidLengthReturns400WithoutProcessing(int length) throws Exception {
+		mvc.perform(post("/api/v1/payments").header("X-API-Key", API_KEY)
+			.header("Idempotency-Key", "k".repeat(length))
+			.contentType(MediaType.APPLICATION_JSON)
+			.content(VALID_BODY))
+			.andExpect(status().isBadRequest())
+			.andExpect(jsonPath("$.error").value("VALIDATION_FAILED"))
+			.andExpect(jsonPath("$.message").value("Idempotency-Key: size must be between 1 and 255"));
+		verifyNoInteractions(paymentService);
+	}
+
+	@Test
+	void reusedKeyReturns422() throws Exception {
+		given(paymentService.process(any(), any(), any())).willThrow(new IdempotencyKeyReusedException());
+
+		mvc.perform(post("/api/v1/payments").header("X-API-Key", API_KEY)
+			.header("Idempotency-Key", "order-1001")
+			.contentType(MediaType.APPLICATION_JSON)
+			.content(VALID_BODY))
+			.andExpect(status().isUnprocessableContent())
+			.andExpect(jsonPath("$.error").value("IDEMPOTENCY_KEY_REUSED"));
 	}
 
 	@Test
 	void declinedPaymentIsStillCreated() throws Exception {
-		given(paymentService.process(same(merchant), eq(VALID_REQUEST)))
-			.willReturn(payment(TransactionStatus.DECLINED, "Insufficient funds"));
+		given(paymentService.process(same(merchant), eq(VALID_REQUEST), isNull()))
+			.willReturn(new PaymentOutcome(payment(TransactionStatus.DECLINED, "Insufficient funds"), false));
 
 		mvc.perform(post("/api/v1/payments").header("X-API-Key", API_KEY)
 			.contentType(MediaType.APPLICATION_JSON)
@@ -114,7 +183,7 @@ class PaymentControllerTests {
 
 	@Test
 	void ruleViolationReturns422() throws Exception {
-		given(paymentService.process(any(), any()))
+		given(paymentService.process(any(), any(), any()))
 			.willThrow(new PaymentRuleViolationException("Amount 600.00 exceeds BONUS limit 500.00"));
 
 		mvc.perform(post("/api/v1/payments").header("X-API-Key", API_KEY)

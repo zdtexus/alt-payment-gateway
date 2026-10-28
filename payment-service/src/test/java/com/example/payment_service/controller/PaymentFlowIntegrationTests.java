@@ -34,6 +34,8 @@ import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.nullValue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.BDDMockito.then;
+import static org.mockito.Mockito.times;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -179,6 +181,52 @@ class PaymentFlowIntegrationTests {
 
 		mvc.perform(get("/api/v1/payments").header("X-API-Key", DEMO_KEY))
 			.andExpect(jsonPath("$.totalElements").value(0));
+	}
+
+	@Test
+	void retriedRequestWithIdempotencyKeyCreatesOnePayment() throws Exception {
+		MvcResult first = createWithKey(DEMO_KEY, "order-1001", "49.90").andReturn();
+		MvcResult retry = createWithKey(DEMO_KEY, "order-1001", "49.90").andReturn();
+
+		assertThat(first.getResponse().getHeader("Idempotent-Replayed")).isNull();
+		assertThat(retry.getResponse().getHeader("Idempotent-Replayed")).isEqualTo("true");
+		assertThat(retry.getResponse().getHeader("Location")).isEqualTo(first.getResponse().getHeader("Location"));
+		assertThat(retry.getResponse().getContentAsString()).isEqualTo(first.getResponse().getContentAsString());
+		then(paymentProvider).should(times(1)).process(any());
+		mvc.perform(get("/api/v1/payments").header("X-API-Key", DEMO_KEY))
+			.andExpect(jsonPath("$.totalElements").value(1));
+	}
+
+	@Test
+	void reusedIdempotencyKeyWithDifferentBodyReturns422() throws Exception {
+		createWithKey(DEMO_KEY, "order-1001", "49.90");
+
+		mvc.perform(post("/api/v1/payments").header("X-API-Key", DEMO_KEY)
+			.header("Idempotency-Key", "order-1001")
+			.contentType(MediaType.APPLICATION_JSON)
+			.content(body("99.90", "EUR", "CARD")))
+			.andExpect(status().isUnprocessableContent())
+			.andExpect(jsonPath("$.error").value("IDEMPOTENCY_KEY_REUSED"));
+		mvc.perform(get("/api/v1/payments").header("X-API-Key", DEMO_KEY))
+			.andExpect(jsonPath("$.totalElements").value(1));
+	}
+
+	@Test
+	void idempotencyKeysAreScopedPerMerchant() throws Exception {
+		String demoPayment = idOf(createWithKey(DEMO_KEY, "order-1001", "49.90").andReturn());
+		MvcResult other = createWithKey(OTHER_KEY, "order-1001", "49.90").andReturn();
+
+		assertThat(other.getResponse().getHeader("Idempotent-Replayed")).isNull();
+		assertThat(idOf(other)).isNotEqualTo(demoPayment);
+	}
+
+	private ResultActions createWithKey(String apiKey, String idempotencyKey, String amount) throws Exception {
+		return mvc
+			.perform(post("/api/v1/payments").header("X-API-Key", apiKey)
+				.header("Idempotency-Key", idempotencyKey)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(body(amount, "EUR", "CARD")))
+			.andExpect(status().isCreated());
 	}
 
 	private ResultActions create(String apiKey, String amount, String currency,

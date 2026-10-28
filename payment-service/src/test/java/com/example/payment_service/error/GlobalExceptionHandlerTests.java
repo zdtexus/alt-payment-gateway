@@ -6,6 +6,7 @@ import java.util.UUID;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.Size;
 import org.junit.jupiter.api.Test;
 
 import org.springframework.beans.factory.annotation.Autowired;
@@ -20,6 +21,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -48,6 +50,16 @@ class GlobalExceptionHandlerTests {
 
 		expectError(result, 400, "VALIDATION_FAILED", "amount: must be greater than 0; currency: must not be blank",
 				"/test/payments");
+	}
+
+	@Test
+	void invalidFieldAndHeaderValidatedTogetherAreNamedByFieldAndHeader() throws Exception {
+		ResultActions result = mvc.perform(post("/test/payments-with-header").header("X-Ref", "toolong")
+			.contentType(MediaType.APPLICATION_JSON)
+			.content("{\"amount\":-1,\"currency\":\"EUR\"}"));
+
+		expectError(result, 400, "VALIDATION_FAILED", "X-Ref: size must be between 0 and 3; amount: must be greater than 0",
+				"/test/payments-with-header");
 	}
 
 	@Test
@@ -129,6 +141,11 @@ class GlobalExceptionHandlerTests {
 
 		@PostMapping("/test/payments")
 		void create(@Valid @RequestBody TestPaymentRequest request) {
+		}
+
+		@PostMapping("/test/payments-with-header")
+		void createWithHeader(@Valid @RequestBody TestPaymentRequest request,
+				@RequestHeader(name = "X-Ref", required = false) @Size(max = 3) String ref) {
 		}
 
 		@GetMapping("/test/payments")
