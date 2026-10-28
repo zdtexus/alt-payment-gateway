@@ -75,12 +75,16 @@ class PaymentServiceTests {
 
 	private final AtomicReference<TransactionStatus> statusWhenSaved = new AtomicReference<>();
 
+	private final AtomicReference<String> providerWhenSaved = new AtomicReference<>();
+
 	@BeforeEach
 	void assignIdOnSave() {
 		given(providerRouter.providerFor(any())).willReturn(paymentProvider);
+		given(paymentProvider.name()).willReturn("simulated");
 		given(transactionRepository.saveAndFlush(any())).willAnswer((invocation) -> {
 			Transaction transaction = invocation.getArgument(0);
 			statusWhenSaved.set(transaction.getStatus());
+			providerWhenSaved.set(transaction.getProvider());
 			transaction.setId(PAYMENT_ID);
 			return transaction;
 		});
@@ -125,6 +129,44 @@ class PaymentServiceTests {
 		assertThat(saved.getValue().getMerchant()).isSameAs(merchant);
 		verify(paymentProvider)
 			.process(new ProviderRequest(PAYMENT_ID, PaymentMethod.CARD, "EUR", new BigDecimal("49.90")));
+	}
+
+	@Test
+	void storesProviderNameOnThePendingTransaction() {
+		given(paymentProvider.process(any())).willReturn(ProviderResult.approved());
+
+		paymentService.process(merchant, REQUEST);
+
+		assertThat(providerWhenSaved).hasValue("simulated");
+	}
+
+	@Test
+	void storesProviderReferenceOfApprovedPayment() {
+		given(paymentProvider.process(any())).willReturn(ProviderResult.approved("ref-123"));
+
+		paymentService.process(merchant, REQUEST);
+
+		assertThat(savedTransaction().getProviderReference()).isEqualTo("ref-123");
+	}
+
+	@Test
+	void storesProviderReferenceOfDeclinedPayment() {
+		given(paymentProvider.process(any())).willReturn(ProviderResult.declined("Insufficient funds", "ref-456"));
+
+		paymentService.process(merchant, REQUEST);
+
+		Transaction saved = savedTransaction();
+		assertThat(saved.getProviderReference()).isEqualTo("ref-456");
+		assertThat(saved.getDeclineReason()).isEqualTo("Insufficient funds");
+	}
+
+	@Test
+	void resultWithoutReferenceLeavesItEmpty() {
+		given(paymentProvider.process(any())).willReturn(ProviderResult.approved());
+
+		paymentService.process(merchant, REQUEST);
+
+		assertThat(savedTransaction().getProviderReference()).isNull();
 	}
 
 	@Test
@@ -229,6 +271,12 @@ class PaymentServiceTests {
 		transaction.setPaymentMethod(PaymentMethod.CARD);
 		transaction.setStatus(TransactionStatus.SUCCEEDED);
 		return transaction;
+	}
+
+	private Transaction savedTransaction() {
+		ArgumentCaptor<Transaction> saved = ArgumentCaptor.forClass(Transaction.class);
+		verify(transactionRepository).saveAndFlush(saved.capture());
+		return saved.getValue();
 	}
 
 }

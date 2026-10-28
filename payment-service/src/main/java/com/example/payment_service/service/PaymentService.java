@@ -24,6 +24,7 @@ import com.example.payment_service.entity.TransactionStatus;
 import com.example.payment_service.error.IdempotencyKeyReusedException;
 import com.example.payment_service.error.PaymentNotFoundException;
 import com.example.payment_service.event.PaymentProcessedEvent;
+import com.example.payment_service.provider.PaymentProvider;
 import com.example.payment_service.provider.PaymentProviderRouter;
 import com.example.payment_service.provider.ProviderRequest;
 import com.example.payment_service.provider.ProviderResult;
@@ -96,16 +97,21 @@ public class PaymentService {
 		transaction.setCurrency(request.currency());
 		transaction.setPaymentMethod(request.paymentMethod());
 		transaction.setStatus(TransactionStatus.PENDING);
+		PaymentProvider provider = providerRouter.providerFor(request.paymentMethod());
+		transaction.setProvider(provider.name());
 		transaction = transactionRepository.saveAndFlush(transaction);
 
-		ProviderResult result = providerRouter.providerFor(transaction.getPaymentMethod())
-			.process(new ProviderRequest(transaction.getId(), transaction.getPaymentMethod(), transaction.getCurrency(),
-					transaction.getAmount()));
+		ProviderResult result = provider.process(new ProviderRequest(transaction.getId(),
+				transaction.getPaymentMethod(), transaction.getCurrency(), transaction.getAmount()));
 		switch (result) {
-			case ProviderResult.Approved approved -> transaction.setStatus(TransactionStatus.SUCCEEDED);
-			case ProviderResult.Declined(String reason) -> {
+			case ProviderResult.Approved(String reference) -> {
+				transaction.setStatus(TransactionStatus.SUCCEEDED);
+				transaction.setProviderReference(reference);
+			}
+			case ProviderResult.Declined(String reason, String reference) -> {
 				transaction.setStatus(TransactionStatus.DECLINED);
 				transaction.setDeclineReason(reason);
+				transaction.setProviderReference(reference);
 			}
 		}
 		transaction.setProcessedAt(Instant.now().truncatedTo(ChronoUnit.MICROS));

@@ -332,8 +332,11 @@ API keys are never stored. The database keeps only their SHA-256 hash (`api_key_
 merchants      id, name, api_key_hash, email, phone, status
 transactions   id, merchant_id, amount, currency, payment_method, status,
                decline_reason, created_at, processed_at,
-               idempotency_key, request_hash
+               idempotency_key, request_hash,
+               provider, provider_reference
 ```
+
+Each transaction records which payment provider handled it (`provider`, for example `simulated`) and that provider's own transaction ID (`provider_reference`, empty if the provider returns none). Payments made before these columns existed are recorded as `simulated`.
 
 To reset the local database:
 

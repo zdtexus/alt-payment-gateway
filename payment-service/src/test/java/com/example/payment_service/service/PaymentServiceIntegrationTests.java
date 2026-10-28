@@ -61,12 +61,14 @@ class PaymentServiceIntegrationTests {
 
 	@Test
 	void approvedPaymentIsStoredAsSucceeded() {
-		willReturn(ProviderResult.approved()).given(paymentProvider).process(any());
+		willReturn(ProviderResult.approved("sim_ref-1")).given(paymentProvider).process(any());
 
 		PaymentResponse response = paymentService.process(demoMerchant(), request("49.90", PaymentMethod.CARD));
 
 		Transaction stored = transactionRepository.findById(response.id()).orElseThrow();
 		assertThat(stored.getStatus()).isEqualTo(TransactionStatus.SUCCEEDED);
+		assertThat(stored.getProvider()).isEqualTo("simulated");
+		assertThat(stored.getProviderReference()).isEqualTo("sim_ref-1");
 		assertThat(stored.getDeclineReason()).isNull();
 		assertThat(stored.getAmount()).isEqualByComparingTo("49.90");
 		assertThat(stored.getCurrency()).isEqualTo("EUR");
@@ -81,12 +83,14 @@ class PaymentServiceIntegrationTests {
 
 	@Test
 	void declinedPaymentIsStoredWithReason() {
-		willReturn(ProviderResult.declined("Insufficient funds")).given(paymentProvider).process(any());
+		willReturn(ProviderResult.declined("Insufficient funds", "sim_ref-2")).given(paymentProvider).process(any());
 
 		PaymentResponse response = paymentService.process(demoMerchant(), request("49.90", PaymentMethod.CARD));
 
 		Transaction stored = transactionRepository.findById(response.id()).orElseThrow();
 		assertThat(stored.getStatus()).isEqualTo(TransactionStatus.DECLINED);
+		assertThat(stored.getProvider()).isEqualTo("simulated");
+		assertThat(stored.getProviderReference()).isEqualTo("sim_ref-2");
 		assertThat(stored.getDeclineReason()).isEqualTo("Insufficient funds");
 		assertThat(stored.getProcessedAt()).isNotNull();
 	}

@@ -83,8 +83,8 @@ class IdempotencyMigrationTests {
 	private void insertTransaction(UUID merchantId, String idempotencyKey, String requestHash) {
 		jdbcTemplate.update("""
 				INSERT INTO transactions (id, merchant_id, amount, currency, payment_method, status,
-				                          idempotency_key, request_hash)
-				VALUES (?, ?, 10.00, 'EUR', 'CARD', 'PENDING', ?, ?)
+				                          idempotency_key, request_hash, provider)
+				VALUES (?, ?, 10.00, 'EUR', 'CARD', 'PENDING', ?, ?, 'simulated')
 				""", UUID.randomUUID(), merchantId, idempotencyKey, requestHash);
 	}
 

@@ -70,6 +70,12 @@ public class Transaction {
 	@Column(name = "request_hash", length = 64)
 	private String requestHash;
 
+	@Column(nullable = false, length = 64)
+	private String provider;
+
+	@Column(name = "provider_reference")
+	private String providerReference;
+
 	@PrePersist
 	void onCreate() {
 		if (createdAt == null) {
