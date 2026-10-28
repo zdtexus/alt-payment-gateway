@@ -51,12 +51,38 @@ class ProviderResultTests {
 	void resultsCanBeHandledExhaustively() {
 		assertThat(describe(ProviderResult.approved("ref-1"))).isEqualTo("approved ref-1");
 		assertThat(describe(ProviderResult.declined("Card expired"))).isEqualTo("declined: Card expired null");
+		assertThat(describe(ProviderResult.pending("ref-3"))).isEqualTo("pending ref-3");
+	}
+
+	@Test
+	void pendingCarriesReference() {
+		assertThat(ProviderResult.pending("ref-3")).isEqualTo(new ProviderResult.Pending("ref-3"));
+	}
+
+	@Test
+	void pendingRequiresReference() {
+		assertThatIllegalArgumentException().isThrownBy(() -> ProviderResult.pending(null))
+			.withMessage("Pending result needs a provider reference");
+	}
+
+	@ParameterizedTest
+	@ValueSource(strings = { "", "  " })
+	void pendingReferenceMustNotBeBlank(String reference) {
+		assertThatIllegalArgumentException().isThrownBy(() -> ProviderResult.pending(reference))
+			.withMessage("Provider reference must be null or 1 to 255 characters and not blank");
+	}
+
+	@Test
+	void pendingReferenceFitsTheDatabaseColumn() {
+		assertThat(ProviderResult.pending("r".repeat(255))).isNotNull();
+		assertThatIllegalArgumentException().isThrownBy(() -> ProviderResult.pending("r".repeat(256)));
 	}
 
 	private static String describe(ProviderResult result) {
 		return switch (result) {
 			case ProviderResult.Approved(String reference) -> "approved " + reference;
 			case ProviderResult.Declined(String reason, String reference) -> "declined: " + reason + " " + reference;
+			case ProviderResult.Pending(String reference) -> "pending " + reference;
 		};
 	}
 

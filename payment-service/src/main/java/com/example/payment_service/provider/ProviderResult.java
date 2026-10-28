@@ -20,6 +20,10 @@ public sealed interface ProviderResult {
 		return new Declined(reason, reference);
 	}
 
+	static ProviderResult pending(String reference) {
+		return new Pending(reference);
+	}
+
 	private static void checkReference(String reference) {
 		if (reference != null && (reference.isBlank() || reference.length() > MAX_REFERENCE_LENGTH)) {
 			throw new IllegalArgumentException("Provider reference must be null or 1 to " + MAX_REFERENCE_LENGTH
@@ -40,6 +44,17 @@ public sealed interface ProviderResult {
 		public Declined {
 			if (reason == null || reason.isBlank()) {
 				throw new IllegalArgumentException("Decline reason must not be blank");
+			}
+			checkReference(reference);
+		}
+
+	}
+
+	record Pending(String reference) implements ProviderResult {
+
+		public Pending {
+			if (reference == null) {
+				throw new IllegalArgumentException("Pending result needs a provider reference");
 			}
 			checkReference(reference);
 		}

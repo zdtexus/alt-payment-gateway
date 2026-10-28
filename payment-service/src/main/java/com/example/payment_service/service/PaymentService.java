@@ -113,6 +113,10 @@ public class PaymentService {
 				transaction.setDeclineReason(reason);
 				transaction.setProviderReference(reference);
 			}
+			case ProviderResult.Pending(String reference) -> {
+				transaction.setProviderReference(reference);
+				return new PaymentOutcome(PaymentResponse.from(transaction), false);
+			}
 		}
 		transaction.setProcessedAt(Instant.now().truncatedTo(ChronoUnit.MICROS));
 		eventPublisher.publishEvent(PaymentProcessedEvent.from(transaction));

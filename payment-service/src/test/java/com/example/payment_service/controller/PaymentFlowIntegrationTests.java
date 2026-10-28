@@ -139,6 +139,29 @@ class PaymentFlowIntegrationTests {
 	}
 
 	@Test
+	void pendingPaymentIsCreatedAndFilterableByStatus() throws Exception {
+		willReturn(ProviderResult.pending("sim_ref-1")).given(paymentProvider).process(any());
+
+		MvcResult created = mvc
+			.perform(post("/api/v1/payments").header("X-API-Key", DEMO_KEY)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(body("49.90", "EUR", "CARD")))
+			.andExpect(status().isCreated())
+			.andExpect(jsonPath("$.status").value("PENDING"))
+			.andExpect(jsonPath("$.declineReason").value(nullValue()))
+			.andExpect(jsonPath("$.processedAt").value(nullValue()))
+			.andReturn();
+		String id = idOf(created);
+
+		mvc.perform(get("/api/v1/payments/" + id).header("X-API-Key", DEMO_KEY))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.status").value("PENDING"))
+			.andExpect(jsonPath("$.providerReference").doesNotExist());
+		mvc.perform(get("/api/v1/payments").param("status", "PENDING").header("X-API-Key", DEMO_KEY))
+			.andExpect(jsonPath("$.content[*].id", contains(id)));
+	}
+
+	@Test
 	void merchantCannotSeeAnotherMerchantsPayments() throws Exception {
 		String demoPayment = idOf(create(DEMO_KEY, "49.90", "EUR", "CARD").andReturn());
 		String otherPayment = idOf(create(OTHER_KEY, "15.00", "PLN", "KVIK").andReturn());

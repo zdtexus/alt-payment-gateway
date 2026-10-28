@@ -113,6 +113,18 @@ class NotificationListenerIntegrationTests {
 	}
 
 	@Test
+	void pendingPaymentSendsNoReceiptYet() {
+		willReturn(ProviderResult.pending("sim_ref-1")).given(paymentProvider).process(any());
+
+		PaymentResponse response = paymentService.process(demoMerchant(),
+				new CreatePaymentRequest(new BigDecimal("49.90"), "EUR", PaymentMethod.CARD));
+
+		assertThat(response.status()).isEqualTo(TransactionStatus.PENDING);
+		verify(emailSender, after(1000).never()).send(any(), any(), any());
+		verify(smsSender, never()).send(any(), any());
+	}
+
+	@Test
 	void providerFailureSendsNothing() {
 		willThrow(new IllegalStateException("Provider unreachable")).given(paymentProvider).process(any());
 

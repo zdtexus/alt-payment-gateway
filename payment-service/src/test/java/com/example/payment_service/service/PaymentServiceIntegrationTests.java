@@ -97,6 +97,21 @@ class PaymentServiceIntegrationTests {
 	}
 
 	@Test
+	void pendingPaymentIsStoredAsPendingWithoutEvent() {
+		willReturn(ProviderResult.pending("sim_ref-3")).given(paymentProvider).process(any());
+
+		PaymentResponse response = paymentService.process(demoMerchant(), request("49.90", PaymentMethod.CARD));
+
+		Transaction stored = transactionRepository.findById(response.id()).orElseThrow();
+		assertThat(stored.getStatus()).isEqualTo(TransactionStatus.PENDING);
+		assertThat(stored.getProvider()).isEqualTo("simulated");
+		assertThat(stored.getProviderReference()).isEqualTo("sim_ref-3");
+		assertThat(stored.getDeclineReason()).isNull();
+		assertThat(stored.getProcessedAt()).isNull();
+		assertThat(events.stream(PaymentProcessedEvent.class)).isEmpty();
+	}
+
+	@Test
 	void ruleViolationStoresNothing() {
 		assertThatExceptionOfType(PaymentRuleViolationException.class)
 			.isThrownBy(() -> paymentService.process(demoMerchant(), request("600.00", PaymentMethod.BONUS)));

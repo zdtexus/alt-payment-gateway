@@ -98,6 +98,20 @@ class PaymentIdempotencyIntegrationTests {
 	}
 
 	@Test
+	void replayOfPendingPaymentReturnsItWithoutCallingProviderAgain() {
+		willReturn(ProviderResult.pending("sim_ref-1")).given(paymentProvider).process(any());
+
+		PaymentOutcome first = paymentService.process(demoMerchant(), request("49.90", "EUR"), KEY);
+		PaymentOutcome retry = paymentService.process(demoMerchant(), request("49.90", "EUR"), KEY);
+
+		assertThat(retry.replayed()).isTrue();
+		assertThat(retry.payment()).isEqualTo(first.payment());
+		assertThat(retry.payment().status()).isEqualTo(TransactionStatus.PENDING);
+		then(paymentProvider).should(times(1)).process(any());
+		assertThat(events.stream(PaymentProcessedEvent.class)).isEmpty();
+	}
+
+	@Test
 	void equalAmountWrittenDifferentlyIsTheSameRequest() {
 		willReturn(ProviderResult.approved()).given(paymentProvider).process(any());
 

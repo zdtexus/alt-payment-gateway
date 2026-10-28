@@ -45,6 +45,7 @@ class FixedPaymentProviderTests {
 				references.add(switch (provider.process(REQUEST)) {
 					case ProviderResult.Approved(String reference) -> reference;
 					case ProviderResult.Declined(String reason, String reference) -> reference;
+					case ProviderResult.Pending(String reference) -> reference;
 				});
 			}
 		}

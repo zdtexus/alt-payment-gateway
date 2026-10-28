@@ -118,6 +118,22 @@ class PaymentServiceTests {
 	}
 
 	@Test
+	void pendingPaymentStaysPendingWithReferenceAndNoEvent() {
+		given(paymentProvider.process(any())).willReturn(ProviderResult.pending("ref-789"));
+
+		PaymentResponse response = paymentService.process(merchant, REQUEST);
+
+		assertThat(response.status()).isEqualTo(TransactionStatus.PENDING);
+		assertThat(response.declineReason()).isNull();
+		assertThat(response.processedAt()).isNull();
+		Transaction saved = savedTransaction();
+		assertThat(saved.getStatus()).isEqualTo(TransactionStatus.PENDING);
+		assertThat(saved.getProviderReference()).isEqualTo("ref-789");
+		assertThat(saved.getProcessedAt()).isNull();
+		verifyNoInteractions(eventPublisher);
+	}
+
+	@Test
 	void savesPendingTransactionForMerchantBeforeCallingProvider() {
 		given(paymentProvider.process(any())).willReturn(ProviderResult.approved());
 
