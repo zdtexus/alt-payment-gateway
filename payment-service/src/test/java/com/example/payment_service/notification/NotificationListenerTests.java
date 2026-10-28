@@ -114,7 +114,7 @@ class NotificationListenerTests {
 	private static PaymentProcessedEvent event(TransactionStatus status, String declineReason, String email,
 			String phone) {
 		return new PaymentProcessedEvent(PAYMENT_ID, "Demo Shop", email, phone, new BigDecimal("49.90"), "EUR",
-				PaymentMethod.CARD, status, declineReason, Instant.parse("2026-01-15T10:30:01Z"));
+				PaymentMethod.CARD, "simulated", status, declineReason, Instant.parse("2026-01-15T10:30:01Z"));
 	}
 
 }

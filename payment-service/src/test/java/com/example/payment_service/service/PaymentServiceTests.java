@@ -189,8 +189,8 @@ class PaymentServiceTests {
 		PaymentResponse response = paymentService.process(merchant, REQUEST);
 
 		verify(eventPublisher).publishEvent(new PaymentProcessedEvent(PAYMENT_ID, "Demo Shop", "shop@example.com",
-				"+380501234567", new BigDecimal("49.90"), "EUR", PaymentMethod.CARD, TransactionStatus.DECLINED,
-				"Insufficient funds", response.processedAt()));
+				"+380501234567", new BigDecimal("49.90"), "EUR", PaymentMethod.CARD, "simulated",
+				TransactionStatus.DECLINED, "Insufficient funds", response.processedAt()));
 	}
 
 	@Test

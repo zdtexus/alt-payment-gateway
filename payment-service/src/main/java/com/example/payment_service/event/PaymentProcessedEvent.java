@@ -10,15 +10,15 @@ import com.example.payment_service.entity.Transaction;
 import com.example.payment_service.entity.TransactionStatus;
 
 public record PaymentProcessedEvent(UUID paymentId, String merchantName, String merchantEmail, String merchantPhone,
-		BigDecimal amount, String currency, PaymentMethod paymentMethod, TransactionStatus status,
+		BigDecimal amount, String currency, PaymentMethod paymentMethod, String provider, TransactionStatus status,
 		String declineReason, Instant processedAt) {
 
 	public static PaymentProcessedEvent from(Transaction transaction) {
 		Merchant merchant = transaction.getMerchant();
 		return new PaymentProcessedEvent(transaction.getId(), merchant.getName(), merchant.getEmail(),
 				merchant.getPhone(), transaction.getAmount(), transaction.getCurrency(),
-				transaction.getPaymentMethod(), transaction.getStatus(), transaction.getDeclineReason(),
-				transaction.getProcessedAt());
+				transaction.getPaymentMethod(), transaction.getProvider(), transaction.getStatus(),
+				transaction.getDeclineReason(), transaction.getProcessedAt());
 	}
 
 }

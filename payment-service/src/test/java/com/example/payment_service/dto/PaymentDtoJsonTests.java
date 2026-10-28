@@ -41,10 +41,10 @@ class PaymentDtoJsonTests {
 	}
 
 	@Test
-	void writesPaymentResponse() throws Exception {
+	void writesPaymentResponseWithoutProviderDetails() throws Exception {
 		PaymentResponse response = PaymentResponse.from(declinedTransaction());
 
-		assertThat(responseJson.write(response)).isEqualToJson("""
+		assertThat(responseJson.write(response)).isStrictlyEqualToJson("""
 				{
 				  "id": "7f8e2a1c-4b3d-4e5f-9a6b-1c2d3e4f5a6b",
 				  "amount": 600.00,
@@ -79,6 +79,8 @@ class PaymentDtoJsonTests {
 		transaction.setPaymentMethod(PaymentMethod.CARD);
 		transaction.setStatus(TransactionStatus.DECLINED);
 		transaction.setDeclineReason("Insufficient funds");
+		transaction.setProvider("simulated");
+		transaction.setProviderReference("sim_ref-1");
 		transaction.setCreatedAt(Instant.parse("2026-01-15T10:30:00Z"));
 		transaction.setProcessedAt(Instant.parse("2026-01-15T10:30:01Z"));
 		return transaction;

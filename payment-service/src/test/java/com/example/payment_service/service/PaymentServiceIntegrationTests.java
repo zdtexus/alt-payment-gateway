@@ -78,6 +78,7 @@ class PaymentServiceIntegrationTests {
 			assertThat(event.paymentId()).isEqualTo(response.id());
 			assertThat(event.status()).isEqualTo(TransactionStatus.SUCCEEDED);
 			assertThat(event.merchantName()).isEqualTo("Demo Shop");
+			assertThat(event.provider()).isEqualTo("simulated");
 		});
 	}
 

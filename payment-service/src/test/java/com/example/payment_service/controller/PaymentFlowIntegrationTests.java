@@ -102,11 +102,14 @@ class PaymentFlowIntegrationTests {
 			.andExpect(jsonPath("$.paymentMethod").value("CARD"))
 			.andExpect(jsonPath("$.status").value("SUCCEEDED"))
 			.andExpect(jsonPath("$.declineReason").value(nullValue()))
-			.andExpect(jsonPath("$.processedAt").isNotEmpty());
+			.andExpect(jsonPath("$.processedAt").isNotEmpty())
+			.andExpect(jsonPath("$.provider").doesNotExist())
+			.andExpect(jsonPath("$.providerReference").doesNotExist());
 
 		mvc.perform(get("/api/v1/payments").header("X-API-Key", DEMO_KEY))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.content[*].id", contains(id)))
+			.andExpect(jsonPath("$.content[0].provider").doesNotExist())
 			.andExpect(jsonPath("$.totalElements").value(1));
 	}
 

@@ -11,7 +11,7 @@ The system consists of an API gateway and a payment service, backed by PostgreSQ
 - Admin API to create merchants, suspend them and rotate their API keys
 - Safe retries with the `Idempotency-Key` header, so a retried payment is never charged twice
 - Multiple payment methods with per-method currency and amount rules
-- Simulated payment provider with configurable success rate and latency
+- Payment providers selected per payment method, with a simulated provider that has a configurable success rate and latency
 - Asynchronous email and SMS receipts, sent only after the payment is committed
 - Consistent JSON error responses
 - Versioned database schema with Flyway
@@ -49,7 +49,7 @@ PaymentService.process()                     @Transactional
 
 The merchant receives an email receipt and an SMS for every processed payment, whether it succeeded or was declined. A channel is skipped when the merchant has no email address or phone number. A failed email or SMS is logged as a warning with the payment ID and does not stop the other channel. The mail server is not part of `/actuator/health`, so a mail outage does not mark the service as down.
 
-Email, SMS and the payment provider are defined as interfaces. Implementations are selected through configuration, so a real provider can replace the default one without changes to business code.
+Email, SMS and payment providers are defined as interfaces. Implementations are selected through configuration, so a real provider can be added or swapped without changes to business code. Several payment providers can be active at once, each serving the payment methods routed to it (see [Payment providers](#payment-providers)).
 
 ## Requirements
 
@@ -162,6 +162,23 @@ The gateway refuses to start when a rate limit is below 1 or its burst capacity 
 
 - `log` (default) writes each message to the application log.
 - `http` sends `POST <NOTIFICATION_SMS_HTTP_URL>` with the JSON body `{"to": "+380501112233", "message": "Payment 49.90 EUR succeeded"}`. A `4xx` or `5xx` response, or a timeout, counts as a failed notification.
+
+### Payment providers
+
+Each payment method is sent to one payment provider. A method uses its route (`PAYMENT_PROVIDER_ROUTES_<METHOD>`) if one is set, and otherwise the default provider (`PAYMENT_PROVIDER_DEFAULT`, `simulated`). At startup the service logs the result, for example `Payment provider routes: CARD=simulated, BONUS=simulated, CRYPTO=simulated, KVIK=simulated`, and refuses to start if a route or the default names an unknown provider, or a method is left without one.
+
+Available providers:
+
+- `simulated` (default) approves a share of payments (`PAYMENT_PROVIDER_SUCCESS_RATE`) after a delay (`PAYMENT_PROVIDER_LATENCY`), and returns a reference such as `sim_04347846-62b6-42f4-9d6b-917f5704225c`.
+
+Each transaction stores the provider name and the provider's reference (see [Database](#database)). Both are internal: merchants don't see them in API responses, so providers and routes can change without affecting merchants.
+
+To add a provider:
+
+1. Implement `PaymentProvider` in the `provider` package as a Spring `@Component`. `name()` returns a short unique name (at most 64 characters), for example `acme`. Startup fails if two providers share a name.
+2. Put its settings in a `@ConfigurationProperties("payment.provider.acme")` record, validated like `SimulatedPaymentProviderProperties`, and add any environment variables to this README and `.env.example`.
+3. Return `ProviderResult.approved(reference)` or `ProviderResult.declined(reason, reference)`, passing the provider's own transaction ID (at most 255 characters) when it has one. A thrown exception rolls the payment back and the merchant gets an error.
+4. Route methods to it, for example `PAYMENT_PROVIDER_ROUTES_CRYPTO=acme`. Payment rules (currencies and limits per method) still apply before any provider is called.
 
 ## API
 
@@ -381,7 +398,7 @@ alt-payment-gateway/
 │       ├── error/            Exceptions and the common error format
 │       ├── event/            PaymentProcessedEvent
 │       ├── notification/     Receipt listener, email and SMS senders
-│       ├── provider/         Payment provider interface and simulator
+│       ├── provider/         Payment provider interface, registry, per-method router and simulator
 │       ├── repository/       Spring Data repositories
 │       ├── rules/            Per-method currency and amount rules
 │       └── service/          Payment processing and merchant administration
