@@ -65,20 +65,36 @@ public class PaymentController {
 	@Operation(summary = "Create a payment",
 			description = "Validates the payment method rules, sends the payment to the provider and returns the result. "
 					+ "A declined payment is still created (201) with status DECLINED and a declineReason. "
-					+ "If the provider's result is unknown (for example the provider fails), the payment is created "
-					+ "(201) with status PENDING and no receipt. "
-					+ "The merchant gets an email and SMS receipt after the payment is stored. "
+					+ "If the provider's result is not known yet (the provider confirms later, fails or times out), "
+					+ "the payment is created (201) with status PENDING; the provider settles it later through its "
+					+ "webhook, and GET shows the final status. "
+					+ "The merchant gets an email and SMS receipt once the payment is SUCCEEDED or DECLINED. "
 					+ "Send an Idempotency-Key to make retries safe: a retry with the same key and body returns "
-					+ "the original payment without charging again, and a retry with a different body is rejected.")
-	@ApiResponse(responseCode = "201", description = "Payment created (SUCCEEDED, DECLINED, or PENDING when the result is unknown), or replayed",
+					+ "the payment as stored (PENDING included) without charging again, and a retry with a different "
+					+ "body is rejected.")
+	@ApiResponse(responseCode = "201",
+			description = "Payment created (SUCCEEDED, DECLINED, or PENDING while the result is unknown), or replayed",
+			content = @Content(mediaType = "application/json", schema = @Schema(implementation = PaymentResponse.class),
+					examples = {
+							@ExampleObject(name = "SUCCEEDED", value = """
+									{"id": "7f8e2a1c-4b3d-4e5f-9a6b-1c2d3e4f5a6b", "amount": 49.90, "currency": "EUR",
+									 "paymentMethod": "CARD", "status": "SUCCEEDED", "declineReason": null,
+									 "createdAt": "2026-01-15T10:30:00Z", "processedAt": "2026-01-15T10:30:00.300Z"}"""),
+							@ExampleObject(name = "DECLINED", value = """
+									{"id": "7f8e2a1c-4b3d-4e5f-9a6b-1c2d3e4f5a6b", "amount": 49.90, "currency": "EUR",
+									 "paymentMethod": "CARD", "status": "DECLINED", "declineReason": "Insufficient funds",
+									 "createdAt": "2026-01-15T10:30:00Z", "processedAt": "2026-01-15T10:30:00.300Z"}"""),
+							@ExampleObject(name = "PENDING", value = """
+									{"id": "7f8e2a1c-4b3d-4e5f-9a6b-1c2d3e4f5a6b", "amount": 49.90, "currency": "EUR",
+									 "paymentMethod": "CARD", "status": "PENDING", "declineReason": null,
+									 "createdAt": "2026-01-15T10:30:00Z", "processedAt": null}""") }),
 			headers = {
 					@Header(name = "Location", description = "Relative URL of the created payment",
 							schema = @Schema(example = "/api/v1/payments/7f8e2a1c-4b3d-4e5f-9a6b-1c2d3e4f5a6b")),
 					@Header(name = IDEMPOTENT_REPLAYED_HEADER,
 							description = "Present and true when the response is a replay of an earlier request "
 									+ "with the same Idempotency-Key",
-							schema = @Schema(type = "boolean", example = "true")) },
-			useReturnTypeSchema = true)
+							schema = @Schema(type = "boolean", example = "true")) })
 	@ApiResponse(responseCode = "400", description = "Invalid or malformed request body",
 			content = @Content(schema = @Schema(implementation = ErrorResponse.class), examples = @ExampleObject(value = """
 					{"timestamp": "2026-01-15T10:30:00Z", "status": 400, "error": "VALIDATION_FAILED",
@@ -111,7 +127,8 @@ public class PaymentController {
 	}
 
 	@GetMapping("/{id}")
-	@Operation(summary = "Get a payment", description = "Returns one of the authenticated merchant's payments.")
+	@Operation(summary = "Get a payment", description = "Returns one of the authenticated merchant's payments. "
+			+ "Poll it to see a PENDING payment become SUCCEEDED or DECLINED.")
 	@ApiResponse(responseCode = "200", description = "The payment", useReturnTypeSchema = true)
 	@ApiResponse(responseCode = "400", description = "The id is not a valid UUID",
 			content = @Content(schema = @Schema(implementation = ErrorResponse.class), examples = @ExampleObject(value = """
@@ -136,7 +153,8 @@ public class PaymentController {
 					{"timestamp": "2026-01-15T10:30:00Z", "status": 400, "error": "VALIDATION_FAILED",
 					 "message": "size: must be less than or equal to 100", "path": "/api/v1/payments"}""")))
 	public PageResponse<PaymentResponse> list(@CurrentMerchant Merchant merchant,
-			@Parameter(description = "Only payments with this status") @RequestParam(required = false) TransactionStatus status,
+			@Parameter(description = "Only payments with this status, for example PENDING for payments still waiting "
+					+ "for their provider") @RequestParam(required = false) TransactionStatus status,
 			@Parameter(description = "Zero-based page number") @RequestParam(defaultValue = "0") @PositiveOrZero int page,
 			@Parameter(description = "Page size, 1 to 100") @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
 		return paymentService.list(merchant, status, page, size);

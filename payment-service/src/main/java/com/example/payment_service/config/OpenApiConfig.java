@@ -48,6 +48,8 @@ public class OpenApiConfig {
 				Merchant administration endpoints under `/admin/v1` use the `X-Admin-Key` header instead. \
 				A merchant key never opens them, and the admin key never opens the payments API.
 
+				A payment is `PENDING` until its provider's result is known, then `SUCCEEDED` or `DECLINED`, 				and a final status never changes. Most payments are final in the create response; a provider that 				confirms later, fails or times out leaves the payment `PENDING` until it reports the result 				through `POST /api/v1/providers/{name}/webhook`. That endpoint is for payment providers: 				it needs no API key and is authenticated by an HMAC signature. 				Receipts are sent when a payment becomes final.
+
 				%s
 				Errors use one format: `timestamp`, `status`, `error`, `message`, `path`.
 				""".formatted(paymentRulesTable()));

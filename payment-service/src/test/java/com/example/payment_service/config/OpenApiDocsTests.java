@@ -18,6 +18,7 @@ import static org.hamcrest.Matchers.everyItem;
 import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.hasKey;
 import static org.hamcrest.Matchers.not;
+import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -147,6 +148,26 @@ class OpenApiDocsTests {
 			.andExpect(jsonPath("$.components.schemas.CreatePaymentRequest.properties.currency.example").value("EUR"))
 			.andExpect(jsonPath("$.components.schemas.CreatePaymentRequest.properties.paymentMethod.example")
 				.value("CARD"));
+	}
+
+	@Test
+	void documentsPendingFlow() throws Exception {
+		String created = "$.paths['/api/v1/payments'].post.responses['201'].content['application/json'].examples";
+		String response = "$.components.schemas.PaymentResponse.properties";
+		mvc.perform(get("/v3/api-docs"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath(created + ".keys()", containsInAnyOrder("SUCCEEDED", "DECLINED", "PENDING")))
+			.andExpect(jsonPath(created + ".PENDING.value.status").value("PENDING"))
+			.andExpect(jsonPath(created + ".PENDING.value.processedAt").value(nullValue()))
+			.andExpect(jsonPath(created + ".DECLINED.value.declineReason").value("Insufficient funds"))
+			.andExpect(jsonPath(response + ".status.description", containsString("PENDING until")))
+			.andExpect(jsonPath(response + ".status.enum", containsInAnyOrder("PENDING", "SUCCEEDED", "DECLINED")))
+			.andExpect(jsonPath(response + ".processedAt.description", containsString("null while PENDING")))
+			.andExpect(jsonPath("$.paths['/api/v1/payments'].post.description",
+					containsString("receipt once the payment is SUCCEEDED or DECLINED")))
+			.andExpect(jsonPath("$.paths['/api/v1/payments'].get.parameters[?(@.name == 'status')].description",
+					contains(containsString("PENDING"))))
+			.andExpect(jsonPath("$.info.description", containsString("POST /api/v1/providers/{name}/webhook")));
 	}
 
 	@Test

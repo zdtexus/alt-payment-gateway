@@ -1,8 +1,8 @@
 # Alternative Payment Gateway
 
-A payment gateway built with Spring Boot. Merchants authenticate with an API key, submit payments through a single entry point, and receive email and SMS receipts once a payment is processed.
+A payment gateway built with Spring Boot. Merchants authenticate with an API key, submit payments through a single entry point, and receive email and SMS receipts once a payment is final.
 
-The system consists of an API gateway and a payment service, backed by PostgreSQL. Payment providers are simulated, which makes it possible to exercise declines, limits and other edge cases locally.
+The system consists of an API gateway and a payment service, backed by PostgreSQL. Payment providers are simulated by default (an HTTP provider can be pointed at a real or stub endpoint), which makes it possible to exercise declines, limits and other edge cases locally.
 
 ## Features
 
@@ -12,7 +12,8 @@ The system consists of an API gateway and a payment service, backed by PostgreSQ
 - Safe retries with the `Idempotency-Key` header, so a retried payment is never charged twice
 - Multiple payment methods with per-method currency and amount rules
 - Payment providers selected per payment method: a simulated provider with a configurable success rate and latency, a fixed provider that always approves or always declines, and an HTTP provider with connect and read timeouts
-- Asynchronous email and SMS receipts, sent only after the payment is committed
+- Pending payments that a provider settles later through a signed webhook; every payment reaches its final status exactly once
+- Asynchronous email and SMS receipts, sent only after the payment is committed as succeeded or declined
 - Consistent JSON error responses
 - Versioned database schema with Flyway
 - OpenAPI documentation with Swagger UI
@@ -39,15 +40,21 @@ Client ──► api-gateway :8080 ──(/api/v1/**)──► payment-service :
 Notifications are decoupled from payment processing through Spring application events. The listener runs asynchronously after the transaction commits, so a slow or failing mail server never affects the payment, and no receipt is sent for a payment that was rolled back.
 
 ```text
-PaymentService.process()                     @Transactional
-  ├── save Transaction
-  └── publish PaymentProcessedEvent
-        └── NotificationListener             @Async, after commit
-              ├── EmailSender
-              └── SmsSender
+PaymentService.process()
+  ├── 1. save Transaction as PENDING         transaction 1, committed
+  ├── 2. PaymentProvider.process()           no transaction open
+  └── 3. lock row, apply result              transaction 2
+        └── SUCCEEDED / DECLINED: publish PaymentProcessedEvent
+              └── NotificationListener       @Async, after commit
+                    ├── EmailSender
+                    └── SmsSender
+
+POST /api/v1/providers/{name}/webhook        signed by the provider
+  └── PaymentService.settleFromWebhook()     lock row, apply result if still PENDING
+        └── SUCCEEDED / DECLINED: publish PaymentProcessedEvent (same listener)
 ```
 
-The merchant receives an email receipt and an SMS for every processed payment, whether it succeeded or was declined. A channel is skipped when the merchant has no email address or phone number. A failed email or SMS is logged as a warning with the payment ID and does not stop the other channel. The mail server is not part of `/actuator/health`, so a mail outage does not mark the service as down.
+The merchant receives an email receipt and an SMS for every payment that becomes final, whether it succeeded or was declined. A `PENDING` payment gets its receipt when its provider's webhook settles it. A channel is skipped when the merchant has no email address or phone number. A failed email or SMS is logged as a warning with the payment ID and does not stop the other channel. The mail server is not part of `/actuator/health`, so a mail outage does not mark the service as down.
 
 Email, SMS and payment providers are defined as interfaces. Implementations are selected through configuration, so a real provider can be added or swapped without changes to business code. Several payment providers can be active at once, each serving the payment methods routed to it (see [Payment providers](#payment-providers)).
 
@@ -196,16 +203,18 @@ To add a provider:
 2. Put its settings in a `@ConfigurationProperties("payment.provider.acme")` record, validated like `SimulatedPaymentProviderProperties`, and add any environment variables to this README and `.env.example`.
 3. Return `ProviderResult.approved(reference)` or `ProviderResult.declined(reason, reference)`, passing the provider's own transaction ID (at most 255 characters) when it has one. The provider is called outside any database transaction, after the `PENDING` payment is committed. A thrown exception counts as an unknown result: it is logged as an error with the payment ID, the payment stays `PENDING` with no receipt, and the merchant gets `201` with status `PENDING` (see [Payment statuses](#payment-statuses)).
 4. Route methods to it, for example `PAYMENT_PROVIDER_ROUTES_CRYPTO=acme`. Payment rules (currencies and limits per method) still apply before any provider is called.
+5. If the provider confirms payments later, return `ProviderResult.pending(reference)` and also implement `WebhookProvider`: `acceptsWebhooks()` (for example only when a secret is configured) and `readWebhook(body, signature)`, which checks the provider's signature over the raw body and returns the result with its reference. Its webhooks are then accepted at `/api/v1/providers/acme/webhook`.
 
 ## API
 
-All requests require the `X-API-Key` header. A merchant can only access its own payments. Merchants and their keys are managed through the [admin API](#merchant-administration).
+All payment requests require the `X-API-Key` header. A merchant can only access its own payments. Provider webhooks are the exception: they are called by payment providers and signed instead (see [Provider webhooks](#provider-webhooks)). Merchants and their keys are managed through the [admin API](#merchant-administration).
 
 | Method | Path | Description |
 |---|---|---|
 | `POST` | `/api/v1/payments` | Create and process a payment |
 | `GET` | `/api/v1/payments/{id}` | Retrieve a payment |
 | `GET` | `/api/v1/payments` | List payments, newest first. Supports `status`, `page` and `size`. |
+| `POST` | `/api/v1/providers/{name}/webhook` | Final result of a `PENDING` payment, sent by its provider (no API key, signed) |
 
 Create a payment:
 
@@ -216,7 +225,7 @@ curl -X POST http://localhost:8080/api/v1/payments \
   -d '{"amount": 49.90, "currency": "EUR", "paymentMethod": "CARD"}'
 ```
 
-A successful request returns `201 Created` with a relative `Location` header, for example `/api/v1/payments/7f8e2a1c-4b3d-4e5f-9a6b-1c2d3e4f5a6b`. A declined payment is a regular result and is returned with status `DECLINED`, not as an error.
+A successful request returns `201 Created` with a relative `Location` header, for example `/api/v1/payments/7f8e2a1c-4b3d-4e5f-9a6b-1c2d3e4f5a6b`. A declined payment is a regular result and is returned with status `DECLINED`, not as an error. A payment whose provider hasn't confirmed it yet is returned with status `PENDING` and `processedAt: null`; poll `GET /api/v1/payments/{id}` (or list with `status=PENDING`) for its final status (see [Payment statuses](#payment-statuses)).
 
 The full API reference is available in Swagger UI.
 
@@ -332,7 +341,15 @@ Rate limiting fails open: if Redis can't be reached, requests go through without
 
 A payment is stored as `PENDING` and committed before its provider is called, then updated to `SUCCEEDED` or `DECLINED` in a second transaction, and only then is a receipt sent. Keeping the provider call out of the transaction means a slow provider holds no database connection or row lock.
 
-A payment stays `PENDING` when the provider's result is unknown, for example when the provider fails with an error. The merchant still gets `201` with status `PENDING` and the payment's `Location`. It gets no receipt, and is not charged again on an idempotent retry. Such payments are logged as errors and are settled when the provider reports the result through a webhook.
+| Status | Meaning | Receipt |
+|---|---|---|
+| `PENDING` | Stored; the provider's result isn't known yet. `processedAt` is `null`. | none yet |
+| `SUCCEEDED` | The provider approved the payment. Final. | sent |
+| `DECLINED` | The provider declined it; `declineReason` says why. Final. | sent |
+
+A payment moves from `PENDING` to `SUCCEEDED` or `DECLINED` once, either from the provider's answer to the payment request or later from the provider's [webhook](#provider-webhooks), whichever comes first; a final status never changes.
+
+A payment stays `PENDING` when the provider's result is unknown: the provider answered `PENDING` (it confirms later, for example after a redirect), failed with an error, or didn't answer within its timeout. The merchant still gets `201` with status `PENDING` and the payment's `Location`. It gets no receipt yet, and is not charged again on an idempotent retry. A provider failure or timeout is logged as an error with the provider name and payment ID. The provider settles the payment through its webhook; a payment whose provider sends no webhooks stays `PENDING` until it is checked by hand, and `GET /api/v1/payments?status=PENDING` lists such payments.
 
 ### Provider webhooks
 
@@ -346,6 +363,12 @@ A provider that leaves a payment `PENDING` reports the final result later by cal
 - A `PENDING` payment moves to `SUCCEEDED` or `DECLINED` (with `reason`) and its receipt is sent then. A `PENDING` webhook only stores the reference.
 - A payment moves once. A repeated webhook, or one that contradicts the final status, changes nothing (the contradiction is logged) and still returns `204`, so the provider stops retrying. The webhook and the provider's own late answer can't both settle a payment: both lock the row and only change it while it is `PENDING`.
 - `204` means accepted. `401 INVALID_WEBHOOK_SIGNATURE` means a missing or wrong signature, `400 INVALID_WEBHOOK` a signed body that isn't a valid webhook (unknown status, decline without reason, no reference), and `404 PAYMENT_NOT_FOUND` no matching payment yet (the provider should retry).
+
+To set up webhooks for the `http` provider:
+
+1. Choose a random secret of at least 16 characters and set `PAYMENT_PROVIDER_HTTP_WEBHOOK_SECRET` in `.env` (never commit it).
+2. Give the provider the same secret and the webhook URL through the gateway, for example `https://<gateway host>/api/v1/providers/http/webhook`.
+3. The provider signs every webhook body with the secret and retries until it gets `204`. Payments it answered with `PENDING`, or that timed out, then become `SUCCEEDED` or `DECLINED` and get their receipt.
 
 ### Errors
 
@@ -364,14 +387,17 @@ Errors are returned in a common format:
 | Status | Error | Cause |
 |---|---|---|
 | 400 | `VALIDATION_FAILED` | Malformed request body, invalid field, or invalid `id`, `status`, `page`, `size` or `Idempotency-Key` |
+| 400 | `INVALID_WEBHOOK` | Signed provider webhook whose body is not a valid result (unknown status, decline without reason, no reference) |
 | 401 | `INVALID_API_KEY` | Missing or unknown API key |
 | 401 | `INVALID_ADMIN_KEY` | Missing or wrong `X-Admin-Key` on an `/admin/**` path |
+| 401 | `INVALID_WEBHOOK_SIGNATURE` | Provider webhook with a missing or wrong `X-Webhook-Signature` |
 | 403 | `MERCHANT_SUSPENDED` | Merchant account is suspended |
-| 404 | `PAYMENT_NOT_FOUND` | Payment does not exist or belongs to another merchant |
+| 404 | `PAYMENT_NOT_FOUND` | Payment does not exist or belongs to another merchant; for a webhook, no payment of that provider matches yet |
+| 404 | `PROVIDER_NOT_FOUND` | Webhook for a provider that doesn't exist or doesn't accept webhooks |
 | 404 | `MERCHANT_NOT_FOUND` | Admin endpoint called with an unknown merchant id |
 | 422 | `PAYMENT_RULE_VIOLATION` | Amount or currency not allowed for the payment method |
 | 422 | `IDEMPOTENCY_KEY_REUSED` | `Idempotency-Key` already used with a different request body |
-| 429 | `TOO_MANY_REQUESTS` | Returned by the gateway when the API key or client IP is over the rate limit; see `Retry-After` |
+| 429 | `TOO_MANY_REQUESTS` | Returned by the gateway when the API key, client IP or webhook sender is over the rate limit; see `Retry-After` |
 | 502 | `BAD_GATEWAY` | Returned by the gateway when `payment-service` drops the connection |
 | 503 | `SERVICE_UNAVAILABLE` | Returned by the gateway when `payment-service` cannot be reached |
 
