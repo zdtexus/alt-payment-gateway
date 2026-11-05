@@ -67,6 +67,38 @@ class HttpPaymentProviderPropertiesTests {
 	}
 
 	@Test
+	void toStringMasksApiKeyAndWebhookSecret() {
+		HttpPaymentProviderProperties properties = new HttpPaymentProviderProperties(
+				URI.create("https://pay.example.com/charge"), "provider-api-key", Duration.ofSeconds(2),
+				Duration.ofSeconds(10), "webhook-secret-123456");
+
+		assertThat(properties).hasToString("HttpPaymentProviderProperties[url=https://pay.example.com/charge, "
+				+ "apiKey=***, connectTimeout=PT2S, readTimeout=PT10S, webhookSecret=***]");
+		assertThat(properties.toString()).doesNotContain("provider-api-key").doesNotContain("webhook-secret-123456");
+	}
+
+	@Test
+	void toStringShowsMissingSecretsAsNull() {
+		HttpPaymentProviderProperties properties = new HttpPaymentProviderProperties(
+				URI.create("https://pay.example.com/charge"), "", Duration.ofSeconds(2), Duration.ofSeconds(10),
+				null);
+
+		assertThat(properties).hasToString("HttpPaymentProviderProperties[url=https://pay.example.com/charge, "
+				+ "apiKey=null, connectTimeout=PT2S, readTimeout=PT10S, webhookSecret=null]");
+	}
+
+	@Test
+	void boundPropertiesDoNotRevealSecrets() {
+		contextRunner
+			.withPropertyValues("payment.provider.http.url=https://pay.example.com/charge",
+					"payment.provider.http.api-key=provider-api-key",
+					"payment.provider.http.webhook-secret=webhook-secret-123456")
+			.run((context) -> assertThat(context.getBean(HttpPaymentProviderProperties.class).toString())
+				.doesNotContain("provider-api-key")
+				.doesNotContain("webhook-secret-123456"));
+	}
+
+	@Test
 	void webhookSecretIsOptional() {
 		contextRunner.run((context) -> assertThat(context.getBean(HttpPaymentProviderProperties.class).webhookSecret())
 			.isNull());

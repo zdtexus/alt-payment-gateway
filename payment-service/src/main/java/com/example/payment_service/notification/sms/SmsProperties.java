@@ -9,6 +9,7 @@ import jakarta.validation.constraints.NotNull;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.bind.DefaultValue;
+import org.springframework.util.StringUtils;
 import org.springframework.validation.annotation.Validated;
 
 @Validated
@@ -27,6 +28,13 @@ public record SmsProperties(@DefaultValue("log") @NotNull Provider provider, @De
 	}
 
 	public record Http(URI url, String apiKey, @DefaultValue("5s") @NotNull Duration timeout) {
+
+		@Override
+		public String toString() {
+			return "Http[url=" + url + ", apiKey=" + (StringUtils.hasText(apiKey) ? "***" : null) + ", timeout="
+					+ timeout + "]";
+		}
+
 	}
 
 }

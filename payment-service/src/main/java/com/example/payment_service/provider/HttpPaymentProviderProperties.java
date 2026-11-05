@@ -31,4 +31,14 @@ public record HttpPaymentProviderProperties(URI url, String apiKey,
 		return !StringUtils.hasText(webhookSecret) || webhookSecret.length() >= MIN_WEBHOOK_SECRET_LENGTH;
 	}
 
+	@Override
+	public String toString() {
+		return "HttpPaymentProviderProperties[url=" + url + ", apiKey=" + mask(apiKey) + ", connectTimeout="
+				+ connectTimeout + ", readTimeout=" + readTimeout + ", webhookSecret=" + mask(webhookSecret) + "]";
+	}
+
+	private static String mask(String secret) {
+		return StringUtils.hasText(secret) ? "***" : null;
+	}
+
 }
