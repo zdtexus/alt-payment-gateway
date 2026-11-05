@@ -174,6 +174,8 @@ With Docker Compose, put any of these in `.env` (see the commented examples in `
 
 The gateway refuses to start when a rate limit is below 1 or its burst capacity is smaller than its replenish rate. The service refuses to start with invalid settings, for example a `PAYMENT_PROVIDER_DEFAULT` or route that names no registered provider, a payment method left without a provider, a missing or short `ADMIN_API_KEY`, a success rate outside `0.0`–`1.0`, a `fixed` outcome other than `approve`/`decline` or a blank decline reason, an `http` provider timeout that is zero or negative, an `http` webhook secret shorter than 16 characters, an unknown SMS provider, or `SMS_PROVIDER=http` without a URL.
 
+Secret settings (`ADMIN_API_KEY`, `NOTIFICATION_SMS_HTTP_API_KEY`, `PAYMENT_PROVIDER_HTTP_API_KEY`, `PAYMENT_PROVIDER_HTTP_WEBHOOK_SECRET`) are never written to logs or error messages. The settings and response classes that hold them print `***` instead of the value, and a test fails if any record in the code would print a field named like a key, secret, password or token. Keep real values in the gitignored `.env`; `.env.example` holds placeholders only.
+
 ### SMS providers
 
 - `log` (default) writes each message to the application log.
