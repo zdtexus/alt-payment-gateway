@@ -13,6 +13,13 @@ public class LoggingSmsSender implements SmsSender {
 
 	private static final int VISIBLE_DIGITS = 4;
 
+	static final String STARTUP_WARNING = "SMS_PROVIDER=log: SMS are written to the log, not sent to phones. "
+			+ "Set SMS_PROVIDER=http to send them.";
+
+	public LoggingSmsSender() {
+		log.warn(STARTUP_WARNING);
+	}
+
 	@Override
 	public void send(String phone, String message) {
 		log.info("SMS to {}: {}", mask(phone), message);

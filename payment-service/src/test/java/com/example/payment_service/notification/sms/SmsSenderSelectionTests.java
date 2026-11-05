@@ -4,14 +4,18 @@ import java.net.URI;
 import java.time.Duration;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+@ExtendWith(OutputCaptureExtension.class)
 class SmsSenderSelectionTests {
 
 	private final ApplicationContextRunner contextRunner = new ApplicationContextRunner()
@@ -45,6 +49,31 @@ class SmsSenderSelectionTests {
 				assertThat(http.apiKey()).isEqualTo("secret");
 				assertThat(http.timeout()).isEqualTo(Duration.ofSeconds(2));
 			});
+	}
+
+	@Test
+	void warnsOnceAtStartupWhenSmsAreOnlyLogged(CapturedOutput output) {
+		contextRunner.run((context) -> {
+			assertThat(context).hasSingleBean(LoggingSmsSender.class);
+			context.getBean(SmsSender.class).send("+380501112233", "Payment 1.00 EUR succeeded");
+			context.getBean(SmsSender.class).send("+380501112233", "Payment 2.00 EUR succeeded");
+		});
+
+		assertThat(occurrences(output.getOut(), LoggingSmsSender.STARTUP_WARNING)).isEqualTo(1);
+		assertThat(output.getOut()).contains("WARN").contains("SMS_PROVIDER=log");
+	}
+
+	@Test
+	void doesNotWarnWhenSmsAreSent(CapturedOutput output) {
+		contextRunner
+			.withPropertyValues("notification.sms.provider=http", "notification.sms.http.url=http://sms.local/send")
+			.run((context) -> assertThat(context).hasSingleBean(HttpSmsSender.class));
+
+		assertThat(output.getAll()).doesNotContain(LoggingSmsSender.STARTUP_WARNING);
+	}
+
+	private static int occurrences(String text, String part) {
+		return text.split(java.util.regex.Pattern.quote(part), -1).length - 1;
 	}
 
 	@Test
