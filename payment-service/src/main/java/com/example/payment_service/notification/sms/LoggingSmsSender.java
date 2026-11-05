@@ -11,9 +11,18 @@ public class LoggingSmsSender implements SmsSender {
 
 	private static final Logger log = LoggerFactory.getLogger(LoggingSmsSender.class);
 
+	private static final int VISIBLE_DIGITS = 4;
+
 	@Override
 	public void send(String phone, String message) {
-		log.info("SMS to {}: {}", phone, message);
+		log.info("SMS to {}: {}", mask(phone), message);
+	}
+
+	static String mask(String phone) {
+		if (phone == null || phone.length() <= VISIBLE_DIGITS) {
+			return "***";
+		}
+		return "***" + phone.substring(phone.length() - VISIBLE_DIGITS);
 	}
 
 }
