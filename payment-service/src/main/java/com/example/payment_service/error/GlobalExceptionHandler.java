@@ -3,9 +3,12 @@ package com.example.payment_service.error;
 import java.util.stream.Collectors;
 
 import jakarta.servlet.http.HttpServletRequest;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import org.springframework.context.MessageSourceResolvable;
 import org.springframework.core.MethodParameter;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -19,6 +22,8 @@ import org.springframework.web.method.annotation.MethodArgumentTypeMismatchExcep
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+
+	private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
 	@ExceptionHandler(MethodArgumentNotValidException.class)
 	ResponseEntity<ErrorResponse> handleInvalidBody(MethodArgumentNotValidException ex, HttpServletRequest request) {
@@ -113,6 +118,32 @@ public class GlobalExceptionHandler {
 	ResponseEntity<ErrorResponse> handleWebhookPaymentNotFound(WebhookPaymentNotFoundException ex,
 			HttpServletRequest request) {
 		return error(HttpStatus.NOT_FOUND, "PAYMENT_NOT_FOUND", ex.getMessage(), request);
+	}
+
+	@ExceptionHandler(Exception.class)
+	ResponseEntity<ErrorResponse> handleOtherException(Exception ex, HttpServletRequest request) {
+		if (ex instanceof org.springframework.web.ErrorResponse framework) {
+			return frameworkError(ex, framework, request);
+		}
+		log.error("Unhandled exception on {} {}", request.getMethod(), request.getRequestURI(), ex);
+		return statusError(HttpStatus.INTERNAL_SERVER_ERROR, new HttpHeaders(), request);
+	}
+
+	private static ResponseEntity<ErrorResponse> frameworkError(Exception ex,
+			org.springframework.web.ErrorResponse framework, HttpServletRequest request) {
+		HttpStatus resolved = HttpStatus.resolve(framework.getStatusCode().value());
+		HttpStatus status = (resolved != null) ? resolved : HttpStatus.INTERNAL_SERVER_ERROR;
+		if (status.is5xxServerError()) {
+			log.error("Request failed on {} {}", request.getMethod(), request.getRequestURI(), ex);
+		}
+		return statusError(status, framework.getHeaders(), request);
+	}
+
+	private static ResponseEntity<ErrorResponse> statusError(HttpStatus status, HttpHeaders headers,
+			HttpServletRequest request) {
+		return ResponseEntity.status(status)
+			.headers(headers)
+			.body(ErrorResponse.of(status, status.name(), status.getReasonPhrase(), request.getRequestURI()));
 	}
 
 	private static String errorSource(MethodParameter parameter, MessageSourceResolvable error) {
