@@ -129,7 +129,7 @@ A demo merchant is created on first start:
 | Merchant ID | `11111111-1111-1111-1111-111111111111` |
 | API key | `demo-key-123` |
 | Email | `shop@demo.local` (receipts appear in the Mailpit inbox) |
-| Phone | `+380501112233` (SMS receipts appear in the `payment-service` log) |
+| Phone | `+380501112233` (SMS receipts appear in the `payment-service` log as `SMS to ***2233: …`) |
 
 ## Configuration
 
@@ -178,7 +178,7 @@ Secret settings (`ADMIN_API_KEY`, `NOTIFICATION_SMS_HTTP_API_KEY`, `PAYMENT_PROV
 
 ### SMS providers
 
-- `log` (default) writes each message to the application log.
+- `log` (default) writes each message to the application log instead of sending it, with only the last 4 digits of the phone number, for example `SMS to ***2233: Payment 49.90 EUR succeeded`. The full number never appears in the log. Because no SMS is actually sent, the service logs one warning at startup (`SMS_PROVIDER=log: SMS are written to the log, not sent to phones…`), so a deployment that forgot to set `SMS_PROVIDER=http` is easy to spot.
 - `http` sends `POST <NOTIFICATION_SMS_HTTP_URL>` with the JSON body `{"to": "+380501112233", "message": "Payment 49.90 EUR succeeded"}`. A `4xx` or `5xx` response, or a timeout, counts as a failed notification.
 
 ### Payment providers
