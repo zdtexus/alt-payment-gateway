@@ -62,16 +62,24 @@ public final class TrustedProxies {
 		return new Range(address, prefix);
 	}
 
-	private static InetAddress parseAddress(String entry, String host) {
-		if (!host.contains(":") && !IPV4.matcher(host).matches()) {
-			throw invalid(entry, "not an IP address");
+	static InetAddress parseLiteral(String text) {
+		if (!text.contains(":") && !IPV4.matcher(text).matches()) {
+			return null;
 		}
 		try {
-			return InetAddress.ofLiteral(host);
+			return InetAddress.ofLiteral(text);
 		}
 		catch (IllegalArgumentException ex) {
+			return null;
+		}
+	}
+
+	private static InetAddress parseAddress(String entry, String host) {
+		InetAddress address = parseLiteral(host);
+		if (address == null) {
 			throw invalid(entry, "not an IP address");
 		}
+		return address;
 	}
 
 	private static int parsePrefix(String entry, String text, int maxPrefix) {

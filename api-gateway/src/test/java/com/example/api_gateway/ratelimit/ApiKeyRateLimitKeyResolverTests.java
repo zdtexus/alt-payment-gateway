@@ -15,7 +15,8 @@ class ApiKeyRateLimitKeyResolverTests {
 
 	private static final InetSocketAddress CLIENT = new InetSocketAddress("203.0.113.7", 54321);
 
-	private final ApiKeyRateLimitKeyResolver resolver = new ApiKeyRateLimitKeyResolver();
+	private final ApiKeyRateLimitKeyResolver resolver = new ApiKeyRateLimitKeyResolver(
+			new ClientIpKeyResolver(TrustedProxies.none()));
 
 	@Test
 	void apiKeyIsIdentifiedBySha256HashNeverRawKey() {
@@ -71,7 +72,7 @@ class ApiKeyRateLimitKeyResolverTests {
 
 	@Test
 	void clientIpResolverUsesOnlyTheRemoteAddressWhateverTheKey() {
-		ClientIpKeyResolver clientIpResolver = new ClientIpKeyResolver();
+		ClientIpKeyResolver clientIpResolver = new ClientIpKeyResolver(TrustedProxies.none());
 
 		assertThat(clientIpResolver.resolve(MockServerWebExchange.from(MockServerHttpRequest.get("/")
 			.header("X-API-Key", "key-one")
@@ -89,7 +90,7 @@ class ApiKeyRateLimitKeyResolverTests {
 		resolver.resolve(exchange).block();
 		assertThat(ClientIpKeyResolver.wasChecked(exchange)).isFalse();
 
-		new ClientIpKeyResolver().resolve(exchange).block();
+		new ClientIpKeyResolver(TrustedProxies.none()).resolve(exchange).block();
 		assertThat(ClientIpKeyResolver.wasChecked(exchange)).isTrue();
 	}
 

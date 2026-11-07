@@ -37,8 +37,13 @@ public class RateLimitConfig {
 	}
 
 	@Bean
-	KeyResolver webhookIpKeyResolver() {
-		return (exchange) -> Mono.just("webhook-ip:" + ClientIpKeyResolver.clientIp(exchange));
+	ClientIpKeyResolver clientIpKeyResolver(RateLimitProperties properties) {
+		return new ClientIpKeyResolver(properties.trustedProxies());
+	}
+
+	@Bean
+	KeyResolver webhookIpKeyResolver(ClientIpKeyResolver clientIpKeyResolver) {
+		return (exchange) -> Mono.just("webhook-ip:" + clientIpKeyResolver.clientIp(exchange));
 	}
 
 	@Bean

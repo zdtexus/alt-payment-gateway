@@ -145,6 +145,29 @@ class RateLimitTests {
 	}
 
 	@Test
+	void forwardedForDoesNotChooseTheBucketWithoutTrustedProxies() {
+		int allowed = 0;
+		while (allowed <= BURST + 5 && forwardedStatus("198.51.100.1") == 200) {
+			allowed++;
+		}
+
+		assertThat(allowed).isBetween(BURST, BURST + 1);
+		assertThat(forwardedStatus("198.51.100.2")).isEqualTo(429);
+		List<String> keys = redis.keys("*").collectList().block(Duration.ofSeconds(5));
+		assertThat(keys).noneMatch((key) -> key.contains("198.51.100."));
+	}
+
+	private int forwardedStatus(String forwardedFor) {
+		return client().get()
+			.uri(PAYMENTS)
+			.header("X-Forwarded-For", forwardedFor)
+			.exchange()
+			.returnResult(Void.class)
+			.getStatus()
+			.value();
+	}
+
+	@Test
 	void allowedResponseHasNoRetryAfter() {
 		client().get()
 			.uri(PAYMENTS)

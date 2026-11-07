@@ -19,13 +19,19 @@ public class ApiKeyRateLimitKeyResolver implements KeyResolver {
 
 	static final String API_KEY_HEADER = "X-API-Key";
 
+	private final ClientIpKeyResolver clientIpKeyResolver;
+
+	public ApiKeyRateLimitKeyResolver(ClientIpKeyResolver clientIpKeyResolver) {
+		this.clientIpKeyResolver = clientIpKeyResolver;
+	}
+
 	@Override
 	public Mono<String> resolve(ServerWebExchange exchange) {
 		String apiKey = exchange.getRequest().getHeaders().getFirst(API_KEY_HEADER);
 		if (StringUtils.hasText(apiKey)) {
 			return Mono.just("key:" + sha256(apiKey));
 		}
-		return Mono.just("ip:" + ClientIpKeyResolver.clientIp(exchange));
+		return Mono.just("ip:" + clientIpKeyResolver.clientIp(exchange));
 	}
 
 	private static String sha256(String value) {
