@@ -16,7 +16,9 @@ public record PaymentProcessedEvent(UUID paymentId, String merchantName, String 
 	public static PaymentProcessedEvent from(Transaction transaction) {
 		Merchant merchant = transaction.getMerchant();
 		return new PaymentProcessedEvent(transaction.getId(), merchant.getName(), merchant.getEmail(),
-				merchant.getPhone(), transaction.getAmount(), transaction.getCurrency(),
+				merchant.getPhone(),
+				(transaction.getCapturedAmount() != null) ? transaction.getCapturedAmount() : transaction.getAmount(),
+				transaction.getCurrency(),
 				transaction.getPaymentMethod(), transaction.getProvider(), transaction.getStatus(),
 				transaction.getDeclineReason(), transaction.getProcessedAt());
 	}

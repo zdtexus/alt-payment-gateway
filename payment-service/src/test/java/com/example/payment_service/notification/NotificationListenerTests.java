@@ -101,6 +101,23 @@ class NotificationListenerTests {
 	}
 
 	@Test
+	void voidedPaymentReceiptSaysVoided() {
+		listener.onPaymentProcessed(event(TransactionStatus.VOIDED, null, "shop@example.com", "+380501234567"));
+
+		verify(emailSender).send("shop@example.com", "Payment " + PAYMENT_ID + " voided", """
+				Hello Demo Shop,
+
+				Payment %s voided.
+
+				Amount: 49.90 EUR
+				Method: CARD
+				Status: VOIDED
+				Processed at: 2026-01-15T10:30:01Z
+				""".formatted(PAYMENT_ID));
+		verify(smsSender).send("+380501234567", "Payment 49.90 EUR voided");
+	}
+
+	@Test
 	void declinedPaymentIncludesReason() {
 		listener.onPaymentProcessed(event(TransactionStatus.DECLINED, "Insufficient funds", "shop@example.com", null));
 

@@ -108,7 +108,11 @@ public class NotificationListener {
 	}
 
 	private static String outcome(PaymentProcessedEvent event) {
-		return (event.status() == TransactionStatus.SUCCEEDED) ? "succeeded" : "declined";
+		return switch (event.status()) {
+			case SUCCEEDED -> "succeeded";
+			case VOIDED -> "voided";
+			default -> "declined";
+		};
 	}
 
 }

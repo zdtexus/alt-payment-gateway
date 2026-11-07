@@ -117,6 +117,48 @@ class AuthorizationColumnsMigrationTests {
 			.contains("WHERE ((status)::text = 'AUTHORIZED'::text)");
 	}
 
+	@Test
+	void onlyAnAuthorizedPaymentCanHaveAPendingAction() {
+		assertThatCode(() -> insertAction("AUTHORIZED", "CAPTURE", "30.00", null, null)).doesNotThrowAnyException();
+		assertThatCode(() -> insertAction("AUTHORIZED", "VOID", null, null, null)).doesNotThrowAnyException();
+		assertViolates("ck_transactions_pending_action", () -> insertAction("SUCCEEDED", "VOID", null, null, null));
+		assertViolates("ck_transactions_pending_action", () -> insertAction("AUTHORIZED", "REFUND", null, null, null));
+	}
+
+	@Test
+	void aPendingCaptureHasAnAmountWithinTheAuthorization() {
+		assertViolates("ck_transactions_pending_capture_amount",
+				() -> insertAction("AUTHORIZED", "CAPTURE", null, null, null));
+		assertViolates("ck_transactions_pending_capture_amount",
+				() -> insertAction("AUTHORIZED", "CAPTURE", "49.91", null, null));
+		assertViolates("ck_transactions_pending_capture_amount",
+				() -> insertAction("AUTHORIZED", "CAPTURE", "0.00", null, null));
+		assertViolates("ck_transactions_pending_capture_amount",
+				() -> insertAction("AUTHORIZED", "VOID", "10.00", null, null));
+		assertViolates("ck_transactions_pending_capture_amount",
+				() -> insertAction("AUTHORIZED", null, "10.00", null, null));
+		assertThatCode(() -> insertAction("AUTHORIZED", "CAPTURE", "49.90", null, null)).doesNotThrowAnyException();
+	}
+
+	@Test
+	void anActionKeyIsStoredWithItsRequestHash() {
+		assertViolates("ck_transactions_action_key_has_request_hash",
+				() -> insertAction("AUTHORIZED", "VOID", null, "void-1", null));
+		assertViolates("ck_transactions_action_key_has_request_hash",
+				() -> insertAction("SUCCEEDED", null, null, null, "a".repeat(64)));
+		assertThatCode(() -> insertAction("SUCCEEDED", null, null, "capture-1", "a".repeat(64)))
+			.doesNotThrowAnyException();
+	}
+
+	private static void insertAction(String status, String action, String pendingAmount, String key, String hash) {
+		jdbcTemplate.update("""
+				INSERT INTO transactions (id, merchant_id, amount, currency, payment_method, status, provider,
+				                          capture_method, authorized_amount, authorization_expires_at, pending_action,
+				                          pending_capture_amount, action_idempotency_key, action_request_hash)
+				VALUES (?, ?, 49.90, 'EUR', 'CARD', ?, 'simulated', 'MANUAL', 49.90, now(), ?, ?::numeric, ?, ?)
+				""", UUID.randomUUID(), DEMO_MERCHANT_ID, status, action, pendingAmount, key, hash);
+	}
+
 	private static void assertViolates(String constraint, Runnable insert) {
 		assertThatExceptionOfType(DataIntegrityViolationException.class).isThrownBy(insert::run)
 			.withMessageContaining(constraint);

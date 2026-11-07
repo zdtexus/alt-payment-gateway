@@ -180,6 +180,30 @@ class GlobalExceptionHandlerTests {
 	}
 
 	@Test
+	void refusedCaptureAndVoidReturn409() throws Exception {
+		expectError(mvc.perform(get("/test/not-capturable")), 409, "PAYMENT_NOT_CAPTURABLE", "Payment is VOIDED",
+				"/test/not-capturable");
+		expectError(mvc.perform(get("/test/not-voidable")), 409, "PAYMENT_NOT_VOIDABLE", "Payment is SUCCEEDED",
+				"/test/not-voidable");
+	}
+
+	@Test
+	void captureAboveTheAuthorizationReturns422() throws Exception {
+		expectError(mvc.perform(get("/test/capture-exceeds")), 422, "CAPTURE_EXCEEDS_AUTHORIZED",
+				"Capture 49.91 exceeds the authorized amount 49.90", "/test/capture-exceeds");
+	}
+
+	@Test
+	void declinedCaptureAndVoidReturn422WithTheProvidersReason() throws Exception {
+		expectError(mvc.perform(get("/test/capture-declined")), 422, "CAPTURE_DECLINED",
+				"The payment provider declined the capture: Card expired. The payment stays AUTHORIZED",
+				"/test/capture-declined");
+		expectError(mvc.perform(get("/test/void-declined")), 422, "VOID_DECLINED",
+				"The payment provider declined the void: Already captured. The payment stays AUTHORIZED",
+				"/test/void-declined");
+	}
+
+	@Test
 	void reusedIdempotencyKeyReturns422() throws Exception {
 		ResultActions result = mvc.perform(get("/test/idempotency-key-reused"));
 
@@ -355,6 +379,31 @@ class GlobalExceptionHandlerTests {
 		@GetMapping("/test/manual-capture-not-supported")
 		void manualCaptureNotSupported() {
 			throw new ManualCaptureNotSupportedException(PaymentMethod.KVIK);
+		}
+
+		@GetMapping("/test/not-capturable")
+		void notCapturable() {
+			throw new PaymentNotCapturableException("Payment is VOIDED");
+		}
+
+		@GetMapping("/test/not-voidable")
+		void notVoidable() {
+			throw new PaymentNotVoidableException("Payment is SUCCEEDED");
+		}
+
+		@GetMapping("/test/capture-exceeds")
+		void captureExceeds() {
+			throw new CaptureExceedsAuthorizedException(new BigDecimal("49.91"), new BigDecimal("49.90"));
+		}
+
+		@GetMapping("/test/capture-declined")
+		void captureDeclined() {
+			throw new CaptureDeclinedException("Card expired");
+		}
+
+		@GetMapping("/test/void-declined")
+		void voidDeclined() {
+			throw new VoidDeclinedException("Already captured");
 		}
 
 		@GetMapping("/test/idempotency-key-reused")

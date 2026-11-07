@@ -20,6 +20,7 @@ import com.example.payment_service.dto.PaymentResponse;
 import com.example.payment_service.entity.CaptureMethod;
 import com.example.payment_service.entity.Merchant;
 import com.example.payment_service.entity.PaymentMethod;
+import com.example.payment_service.entity.PendingAction;
 import com.example.payment_service.entity.Transaction;
 import com.example.payment_service.entity.TransactionStatus;
 import com.example.payment_service.repository.MerchantRepository;
@@ -69,6 +70,31 @@ class AuthorizationMappingTests {
 		assertThat(loaded.getCaptureMethod()).isEqualTo(CaptureMethod.MANUAL);
 		assertThat(loaded.getCapturedAmount()).isEqualTo(new BigDecimal("30.00"));
 		assertThat(loaded.getAuthorizationExpiresAt()).isEqualTo(expires);
+	}
+
+	@Test
+	void aPendingActionAndItsKeyAreStoredAndLoaded() {
+		Transaction payment = payment(TransactionStatus.AUTHORIZED);
+		payment.setCaptureMethod(CaptureMethod.MANUAL);
+		payment.setAuthorizedAmount(new BigDecimal("49.90"));
+		payment.setAuthorizationExpiresAt(Instant.now().plus(7, ChronoUnit.DAYS));
+		payment.setPendingAction(PendingAction.CAPTURE);
+		payment.setPendingCaptureAmount(new BigDecimal("30.00"));
+		payment.setActionIdempotencyKey("ship-1");
+		payment.setActionRequestHash("b".repeat(64));
+		UUID id = transactionRepository.saveAndFlush(payment).getId();
+
+		assertThat(jdbcTemplate.queryForMap("""
+				SELECT pending_action, pending_capture_amount, action_idempotency_key, action_request_hash
+				FROM transactions WHERE id = ?
+				""", id)).containsEntry("pending_action", "CAPTURE")
+			.containsEntry("pending_capture_amount", new BigDecimal("30.00"))
+			.containsEntry("action_idempotency_key", "ship-1")
+			.containsEntry("action_request_hash", "b".repeat(64));
+		Transaction loaded = transactionRepository.findById(id).orElseThrow();
+		assertThat(loaded.getPendingAction()).isEqualTo(PendingAction.CAPTURE);
+		assertThat(loaded.getPendingCaptureAmount()).isEqualTo(new BigDecimal("30.00"));
+		assertThat(loaded.getActionIdempotencyKey()).isEqualTo("ship-1");
 	}
 
 	@Test

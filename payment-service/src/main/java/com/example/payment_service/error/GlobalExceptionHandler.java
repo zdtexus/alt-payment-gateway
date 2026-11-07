@@ -123,6 +123,34 @@ public class GlobalExceptionHandler {
 		return error(HttpStatus.UNPROCESSABLE_CONTENT, "REFUND_NOT_SUPPORTED", ex.getMessage(), request);
 	}
 
+	@ExceptionHandler(PaymentNotCapturableException.class)
+	ResponseEntity<ErrorResponse> handlePaymentNotCapturable(PaymentNotCapturableException ex,
+			HttpServletRequest request) {
+		return error(HttpStatus.CONFLICT, "PAYMENT_NOT_CAPTURABLE", ex.getMessage(), request);
+	}
+
+	@ExceptionHandler(PaymentNotVoidableException.class)
+	ResponseEntity<ErrorResponse> handlePaymentNotVoidable(PaymentNotVoidableException ex,
+			HttpServletRequest request) {
+		return error(HttpStatus.CONFLICT, "PAYMENT_NOT_VOIDABLE", ex.getMessage(), request);
+	}
+
+	@ExceptionHandler(CaptureExceedsAuthorizedException.class)
+	ResponseEntity<ErrorResponse> handleCaptureExceedsAuthorized(CaptureExceedsAuthorizedException ex,
+			HttpServletRequest request) {
+		return error(HttpStatus.UNPROCESSABLE_CONTENT, "CAPTURE_EXCEEDS_AUTHORIZED", ex.getMessage(), request);
+	}
+
+	@ExceptionHandler(CaptureDeclinedException.class)
+	ResponseEntity<ErrorResponse> handleCaptureDeclined(CaptureDeclinedException ex, HttpServletRequest request) {
+		return error(HttpStatus.UNPROCESSABLE_CONTENT, "CAPTURE_DECLINED", ex.getMessage(), request);
+	}
+
+	@ExceptionHandler(VoidDeclinedException.class)
+	ResponseEntity<ErrorResponse> handleVoidDeclined(VoidDeclinedException ex, HttpServletRequest request) {
+		return error(HttpStatus.UNPROCESSABLE_CONTENT, "VOID_DECLINED", ex.getMessage(), request);
+	}
+
 	@ExceptionHandler(ManualCaptureNotSupportedException.class)
 	ResponseEntity<ErrorResponse> handleManualCaptureNotSupported(ManualCaptureNotSupportedException ex,
 			HttpServletRequest request) {

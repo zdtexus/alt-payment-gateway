@@ -75,7 +75,9 @@ class PaymentDtoJsonTests {
 					  "declineReason": null,
 					  "createdAt": "2026-01-15T10:30:00Z",
 					  "processedAt": null,
-					  "authorizationExpiresAt": "2026-01-22T10:30:00Z"
+					  "authorizationExpiresAt": "2026-01-22T10:30:00Z",
+					  "capturedAmount": null,
+					  "pendingAction": null
 					}
 					""");
 	}
@@ -96,7 +98,9 @@ class PaymentDtoJsonTests {
 				  "declineReason": "Insufficient funds",
 				  "createdAt": "2026-01-15T10:30:00Z",
 				  "processedAt": "2026-01-15T10:30:01Z",
-				  "authorizationExpiresAt": null
+				  "authorizationExpiresAt": null,
+				  "capturedAmount": null,
+				  "pendingAction": null
 				}
 				""");
 	}

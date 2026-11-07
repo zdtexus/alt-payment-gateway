@@ -103,7 +103,8 @@ class OpenApiDocsTests {
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.components.schemas.PaymentResponse.properties.keys()",
 					containsInAnyOrder("id", "amount", "refundedAmount", "currency", "paymentMethod", "captureMethod",
-							"status", "declineReason", "createdAt", "processedAt", "authorizationExpiresAt")))
+							"status", "declineReason", "createdAt", "processedAt", "authorizationExpiresAt",
+							"capturedAmount", "pendingAction")))
 			.andExpect(jsonPath("$..provider").isEmpty())
 			.andExpect(jsonPath("$..providerReference").isEmpty());
 	}

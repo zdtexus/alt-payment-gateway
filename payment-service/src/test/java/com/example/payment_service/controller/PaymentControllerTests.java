@@ -177,7 +177,7 @@ class PaymentControllerTests {
 				CaptureMethod.MANUAL);
 		PaymentResponse authorized = new PaymentResponse(PAYMENT_ID, new BigDecimal("49.90"), new BigDecimal("0.00"),
 				"EUR", PaymentMethod.CARD, CaptureMethod.MANUAL, TransactionStatus.AUTHORIZED, null,
-				Instant.parse("2026-01-15T10:30:00Z"), null, Instant.parse("2026-01-22T10:30:00Z"));
+				Instant.parse("2026-01-15T10:30:00Z"), null, Instant.parse("2026-01-22T10:30:00Z"), null, null);
 		given(paymentService.process(same(merchant), eq(manual), isNull()))
 			.willReturn(new PaymentOutcome(authorized, false));
 
@@ -307,7 +307,7 @@ class PaymentControllerTests {
 	private static PaymentResponse payment(TransactionStatus status, String declineReason) {
 		return new PaymentResponse(PAYMENT_ID, new BigDecimal("49.90"), new BigDecimal("0.00"), "EUR",
 				PaymentMethod.CARD, CaptureMethod.AUTOMATIC, status, declineReason, Instant.parse("2026-01-15T10:30:00Z"),
-				Instant.parse("2026-01-15T10:30:01Z"), null);
+				Instant.parse("2026-01-15T10:30:01Z"), null, null, null);
 	}
 
 }

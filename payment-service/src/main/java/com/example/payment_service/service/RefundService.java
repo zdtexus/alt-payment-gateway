@@ -117,7 +117,8 @@ public class RefundService {
 		}
 		RefundingProvider provider = providerRegistry.findRefundingProvider(payment.getProvider())
 			.orElseThrow(RefundNotSupportedException::new);
-		BigDecimal remaining = payment.getAmount().subtract(refundRepository.sumAmount(paymentId, RESERVING));
+		BigDecimal charged = (payment.getCapturedAmount() != null) ? payment.getCapturedAmount() : payment.getAmount();
+		BigDecimal remaining = charged.subtract(refundRepository.sumAmount(paymentId, RESERVING));
 		BigDecimal requested = (amount != null) ? amount.setScale(2) : remaining;
 		if (remaining.signum() <= 0 || requested.compareTo(remaining) > 0) {
 			throw new RefundExceedsRemainingException(requested, remaining.max(BigDecimal.ZERO.setScale(2)));

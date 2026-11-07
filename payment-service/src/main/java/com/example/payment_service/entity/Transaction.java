@@ -95,6 +95,20 @@ public class Transaction {
 	@Column(name = "authorization_expires_at")
 	private Instant authorizationExpiresAt;
 
+	@Enumerated(EnumType.STRING)
+	@Column(name = "pending_action", length = 16)
+	private PendingAction pendingAction;
+
+	@Column(name = "pending_capture_amount", precision = 19, scale = 2)
+	private BigDecimal pendingCaptureAmount;
+
+	@Column(name = "action_idempotency_key")
+	private String actionIdempotencyKey;
+
+	@JdbcTypeCode(SqlTypes.CHAR)
+	@Column(name = "action_request_hash", length = 64)
+	private String actionRequestHash;
+
 	@PrePersist
 	void onCreate() {
 		if (createdAt == null) {
