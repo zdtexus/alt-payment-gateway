@@ -25,13 +25,18 @@ class PaymentRulesPropertiesTests {
 	private final ApplicationContextRunner runner = new ApplicationContextRunner()
 		.withUserConfiguration(PropertiesConfig.class);
 
-	@Test
-	void defaultsEqualTheFormerStaticTable() {
+	@ParameterizedTest
+	@CsvSource(delimiter = '|', textBlock = """
+			CARD   | EUR,USD,PLN,UAH | 0.50 | 10000.00
+			BONUS  | EUR             | 0.01 | 500.00
+			CRYPTO | EUR,USD         | 1.00 | 5000.00
+			KVIK   | EUR,PLN         | 0.50 | 2000.00
+			""")
+	void defaultsMatchTheReadmeTable(PaymentMethod method, String currencies, String min, String max) {
 		runner.withInitializer(new ConfigDataApplicationContextInitializer()).run((context) -> {
 			PaymentRulesProperties properties = context.getBean(PaymentRulesProperties.class);
-			for (PaymentMethod method : PaymentMethod.values()) {
-				assertThat(properties.forMethod(method)).as(method.name()).isEqualTo(PaymentRules.forMethod(method));
-			}
+			assertThat(properties.forMethod(method)).isEqualTo(
+					new PaymentMethodRule(Set.of(currencies.split(",")), new BigDecimal(min), new BigDecimal(max)));
 			assertThat(properties.rules()).containsOnlyKeys(PaymentMethod.values());
 		});
 	}
@@ -51,7 +56,8 @@ class PaymentRulesPropertiesTests {
 				assertThat(properties.forMethod(PaymentMethod.CARD).currencies()).containsExactlyInAnyOrder("EUR",
 						"USD");
 				assertThat(properties.forMethod(PaymentMethod.KVIK).minAmount()).isEqualTo(new BigDecimal("1.50"));
-				assertThat(properties.forMethod(PaymentMethod.CRYPTO)).isEqualTo(PaymentRules.forMethod(PaymentMethod.CRYPTO));
+				assertThat(properties.forMethod(PaymentMethod.CRYPTO))
+					.isEqualTo(TestPaymentRules.defaults().forMethod(PaymentMethod.CRYPTO));
 			});
 	}
 
@@ -138,7 +144,7 @@ class PaymentRulesPropertiesTests {
 				properties.add("payment.rules." + each + ".max-amount=" + max);
 			}
 			else {
-				PaymentMethodRule rule = PaymentRules.forMethod(each);
+				PaymentMethodRule rule = TestPaymentRules.defaults().forMethod(each);
 				properties.add("payment.rules." + each + ".currencies=" + String.join(",", rule.currencies()));
 				properties.add("payment.rules." + each + ".min-amount=" + rule.minAmount());
 				properties.add("payment.rules." + each + ".max-amount=" + rule.maxAmount());

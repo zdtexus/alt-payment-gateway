@@ -18,7 +18,7 @@ import com.example.payment_service.auth.ApiKeyAuthFilter;
 import com.example.payment_service.auth.CurrentMerchant;
 import com.example.payment_service.entity.PaymentMethod;
 import com.example.payment_service.rules.PaymentMethodRule;
-import com.example.payment_service.rules.PaymentRules;
+import com.example.payment_service.rules.PaymentRulesProperties;
 
 @Configuration(proxyBeanMethods = false)
 public class OpenApiConfig {
@@ -32,7 +32,7 @@ public class OpenApiConfig {
 	}
 
 	@Bean
-	OpenAPI paymentServiceOpenApi() {
+	OpenAPI paymentServiceOpenApi(PaymentRulesProperties rules) {
 		SecurityScheme apiKey = new SecurityScheme().type(SecurityScheme.Type.APIKEY)
 			.in(SecurityScheme.In.HEADER)
 			.name(ApiKeyAuthFilter.API_KEY_HEADER)
@@ -65,7 +65,7 @@ public class OpenApiConfig {
 				unavailable. Retry the request after that delay.
 				- `404`, `405`, `406` or `415` for an unknown path, method, response type or content type, \
 				with the status name as `error`.
-				""".formatted(paymentRulesTable()));
+				""".formatted(paymentRulesTable(rules)));
 		return new OpenAPI().info(info)
 			.addServersItem(new Server().url("/"))
 			.components(new Components().addSecuritySchemes(API_KEY_SCHEME, apiKey)
@@ -73,10 +73,10 @@ public class OpenApiConfig {
 			.addSecurityItem(new SecurityRequirement().addList(API_KEY_SCHEME));
 	}
 
-	static String paymentRulesTable() {
+	static String paymentRulesTable(PaymentRulesProperties rules) {
 		StringBuilder table = new StringBuilder("| Method | Currencies | Minimum | Maximum |\n|---|---|---|---|\n");
 		for (PaymentMethod method : PaymentMethod.values()) {
-			PaymentMethodRule rule = PaymentRules.forMethod(method);
+			PaymentMethodRule rule = rules.forMethod(method);
 			table.append("| ").append(method)
 				.append(" | ").append(String.join(", ", new TreeSet<>(rule.currencies())))
 				.append(" | ").append(rule.minAmount().toPlainString())

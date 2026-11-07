@@ -1,19 +1,60 @@
 package com.example.payment_service.rules;
 
 import java.math.BigDecimal;
+import java.util.EnumMap;
+import java.util.Map;
+
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
+
 import com.example.payment_service.entity.PaymentMethod;
 import com.example.payment_service.error.PaymentRuleViolationException;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+@ExtendWith(OutputCaptureExtension.class)
 class PaymentRuleValidatorTests {
 
-	private final PaymentRuleValidator validator = new PaymentRuleValidator();
+	private final PaymentRuleValidator validator = new PaymentRuleValidator(TestPaymentRules.defaults());
+
+	@Test
+	void usesTheRulesItIsGiven() {
+		Map<PaymentMethod, PaymentMethodRule> rules = new EnumMap<>(TestPaymentRules.defaults().rules());
+		rules.put(PaymentMethod.BONUS, TestPaymentRules.rule("5.00", "100.00", "EUR", "USD"));
+		PaymentRuleValidator custom = new PaymentRuleValidator(new PaymentRulesProperties(rules));
+
+		assertThatCode(() -> custom.validate(PaymentMethod.BONUS, "USD", new BigDecimal("100.00")))
+			.doesNotThrowAnyException();
+		assertThatThrownBy(() -> custom.validate(PaymentMethod.BONUS, "EUR", new BigDecimal("150.00")))
+			.isInstanceOf(PaymentRuleViolationException.class)
+			.hasMessage("Amount 150.00 exceeds BONUS limit 100.00");
+		assertThatThrownBy(() -> custom.validate(PaymentMethod.BONUS, "EUR", new BigDecimal("4.99")))
+			.isInstanceOf(PaymentRuleViolationException.class)
+			.hasMessage("Amount 4.99 is below BONUS minimum 5.00");
+	}
+
+	@Test
+	void logsTheActiveRulesOncePerValidator(CapturedOutput output) {
+		String line = "Payment rules: CARD=EUR/PLN/UAH/USD 0.50-10000.00, BONUS=EUR 0.01-500.00, "
+				+ "CRYPTO=EUR/USD 1.00-5000.00, KVIK=EUR/PLN 0.50-2000.00";
+		int before = occurrences(output.getAll(), line);
+
+		new PaymentRuleValidator(TestPaymentRules.defaults());
+
+		assertThat(occurrences(output.getAll(), line)).isEqualTo(before + 1);
+	}
+
+	private static int occurrences(String text, String line) {
+		return text.split(java.util.regex.Pattern.quote(line), -1).length - 1;
+	}
 
 	@ParameterizedTest
 	@CsvSource(delimiter = '|', textBlock = """
