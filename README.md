@@ -13,7 +13,8 @@ The system consists of an API gateway and a payment service, backed by PostgreSQ
 - Multiple payment methods with per-method currency and amount rules, set in configuration
 - Payment providers selected per payment method: a simulated provider with a configurable success rate and latency, a fixed provider that always approves or always declines, and an HTTP provider with connect and read timeouts
 - Pending payments that a provider settles later through a signed webhook, or that are re-checked with the provider on a schedule; every payment reaches its final status exactly once
-- Asynchronous email and SMS receipts, sent only after the payment is committed as succeeded or declined
+- Full and partial refunds of succeeded payments, never more than was paid, with idempotent retries
+- Asynchronous email and SMS receipts, sent only after the payment or refund is committed as succeeded or declined
 - Consistent JSON error responses
 - Versioned database schema with Flyway
 - OpenAPI documentation with Swagger UI
@@ -54,7 +55,7 @@ POST /api/v1/providers/{name}/webhook        signed by the provider
         └── SUCCEEDED / DECLINED: publish PaymentProcessedEvent (same listener)
 ```
 
-The merchant receives an email receipt and an SMS for every payment that becomes final, whether it succeeded or was declined. A `PENDING` payment gets its receipt when its provider's webhook settles it. A channel is skipped when the merchant has no email address or phone number. A failed email or SMS is logged as a warning with the payment ID and does not stop the other channel. The mail server is not part of `/actuator/health`, so a mail outage does not mark the service as down.
+The merchant receives an email receipt and an SMS for every payment that becomes final, whether it succeeded or was declined. A `PENDING` payment gets its receipt when its provider's webhook settles it. A channel is skipped when the merchant has no email address or phone number. A failed email or SMS is logged as a warning with the payment ID and does not stop the other channel. The mail server is not part of `/actuator/health`, so a mail outage does not mark the service as down. Refunds get their own receipt (`Refund <id> succeeded`, SMS `Refund 10.00 EUR succeeded`) once they become final.
 
 Email, SMS and payment providers are defined as interfaces. Implementations are selected through configuration, so a real provider can be added or swapped without changes to business code. Several payment providers can be active at once, each serving the payment methods routed to it (see [Payment providers](#payment-providers)).
 
@@ -160,6 +161,7 @@ Services are configured through environment variables. Defaults are suitable for
 | `PAYMENT_PROVIDER_HTTP_READ_TIMEOUT` | payment-service | `10s` | How long the `http` provider may take to answer (`payment.provider.http.read-timeout`). A payment whose provider doesn't answer in time stays `PENDING`. |
 | `PAYMENT_PROVIDER_HTTP_WEBHOOK_SECRET` | payment-service | | Shared secret the `http` provider signs its webhooks with, at least 16 characters (`payment.provider.http.webhook-secret`). Empty means the provider sends no webhooks (`404`). See [Provider webhooks](#provider-webhooks). |
 | `PAYMENT_PROVIDER_HTTP_STATUS_URL` | payment-service | | Endpoint the `http` provider answers status queries on (`payment.provider.http.status-url`). When set, `PENDING` payments of the `http` provider are re-checked there. See [Re-checking pending payments](#re-checking-pending-payments). |
+| `PAYMENT_PROVIDER_HTTP_REFUND_URL` | payment-service | | Endpoint the `http` provider sends refunds to (`payment.provider.http.refund-url`). Payments of the `http` provider can be refunded only when this is set; otherwise refunds get `422 REFUND_NOT_SUPPORTED`. |
 | `PAYMENT_RECONCILIATION_ENABLED` | payment-service | `true` | Run the job that re-checks `PENDING` payments with their providers |
 | `PAYMENT_RECONCILIATION_INTERVAL` | payment-service | `1m` | Pause between two runs of the job, and the first backoff step |
 | `PAYMENT_RECONCILIATION_MIN_AGE` | payment-service | `2m` | How long after its creation a `PENDING` payment is checked for the first time |
@@ -214,6 +216,8 @@ Available providers:
 
   With `PAYMENT_PROVIDER_HTTP_STATUS_URL` set, the provider is also asked about payments that are still `PENDING`: `GET <status URL>?paymentId=<id>&reference=<reference>` (no `reference` while the provider hasn't given one), with the same bearer key and timeouts. It answers in the same format; `PENDING` means "still not known". Untrusted answers, including any error status, count as a failed check, never as a decline. The provider may have charged in those cases, so declining would be wrong. The provider reports the final result later through a [webhook](#provider-webhooks).
 
+  With `PAYMENT_PROVIDER_HTTP_REFUND_URL` set, refunds of its payments are sent there: `POST <refund URL>` with `{"refundId": "...", "paymentId": "...", "paymentReference": "...", "currency": "EUR", "amount": 20.00}` and `Idempotency-Key: <refundId>`, the same bearer key and timeouts, and the same answer format. An answer it can't trust leaves the refund `PENDING`. A `PENDING` refund is asked about with `GET <status URL>?refundId=<id>&paymentId=<id>&reference=<reference>`.
+
 Each transaction stores the provider name and the provider's reference (see [Database](#database)). Both are internal: merchants don't see them in API responses, so providers and routes can change without affecting merchants.
 
 To add a provider:
@@ -224,6 +228,7 @@ To add a provider:
 4. Route methods to it, for example `PAYMENT_PROVIDER_ROUTES_CRYPTO=acme`. Payment rules (currencies and limits per method) still apply before any provider is called.
 5. If the provider confirms payments later, return `ProviderResult.pending(reference)` and also implement `WebhookProvider`: `acceptsWebhooks()` (for example only when a secret is configured) and `readWebhook(body, signature)`, which checks the provider's signature over the raw body and returns the result with its reference. Its webhooks are then accepted at `/api/v1/providers/acme/webhook`.
 6. If the provider can be asked about a payment, also implement `StatusCheckingProvider`: `checksStatus()` (for example only when a status URL is configured) and `checkStatus(request)`, which returns the current result for `request.paymentId()` and `request.providerReference()` (which may be `null`). Its `PENDING` payments are then re-checked on a schedule. Throw on anything you can't trust.
+7. If the provider can refund, also implement `RefundingProvider`: `supportsRefunds()` and `refund(request)`, which returns the result for `request.refundId()` (with `paymentId`, the payment's `paymentReference`, `currency` and `amount`), in the same way as `process`. `simulated` refunds with the same success rate and latency as its payments, and `fixed` follows its configured outcome, with `sim_r_`/`fix_r_` references. To have `PENDING` refunds re-checked, implement `RefundStatusCheckingProvider.checkRefundStatus(request)` too; refund webhooks are read by the same `readWebhook` (see [Provider webhooks](#provider-webhooks)).
 
 ## API
 
@@ -234,7 +239,10 @@ All payment requests require the `X-API-Key` header. A merchant can only access 
 | `POST` | `/api/v1/payments` | Create and process a payment |
 | `GET` | `/api/v1/payments/{id}` | Retrieve a payment |
 | `GET` | `/api/v1/payments` | List payments, newest first. Supports `status`, `page` and `size`. |
-| `POST` | `/api/v1/providers/{name}/webhook` | Final result of a `PENDING` payment, sent by its provider (no API key, signed) |
+| `POST` | `/api/v1/payments/{id}/refunds` | Refund a succeeded payment, in full or in parts |
+| `GET` | `/api/v1/payments/{id}/refunds` | List a payment's refunds, oldest first |
+| `GET` | `/api/v1/payments/{id}/refunds/{refundId}` | Retrieve a refund |
+| `POST` | `/api/v1/providers/{name}/webhook` | Final result of a `PENDING` payment or refund, sent by its provider (no API key, signed) |
 
 Create a payment:
 
@@ -267,6 +275,33 @@ curl -X POST http://localhost:8080/api/v1/payments \
 - Keys are scoped to the merchant and may be 1 to 255 characters long.
 - A request rejected with `400` or `422 PAYMENT_RULE_VIOLATION` stores nothing, so the key can be reused with a corrected body.
 - Requests without the header are processed every time.
+
+### Refunds
+
+A `SUCCEEDED` payment can be refunded in full or in several parts:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/payments/7f8e2a1c-4b3d-4e5f-9a6b-1c2d3e4f5a6b/refunds \
+  -H "X-API-Key: demo-key-123" \
+  -H "Content-Type: application/json" \
+  -d '{"amount": 20.00, "reason": "Item returned"}'
+```
+
+Without a body (or with `{}`), everything that is still refundable is refunded. The response is `201 Created` with `Location: /api/v1/payments/{id}/refunds/{refundId}`:
+
+```json
+{"id": "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d", "paymentId": "7f8e2a1c-4b3d-4e5f-9a6b-1c2d3e4f5a6b",
+ "amount": 20.00, "currency": "EUR", "status": "SUCCEEDED", "reason": "Item returned",
+ "declineReason": null, "createdAt": "2026-01-16T09:00:00Z", "processedAt": "2026-01-16T09:00:00.300Z"}
+```
+
+- **Only succeeded payments.** A `PENDING` or `DECLINED` payment gets `409 PAYMENT_NOT_REFUNDABLE`. A payment of a provider that can't refund gets `422 REFUND_NOT_SUPPORTED`; today `simulated` and `fixed` can, and `http` can with `PAYMENT_PROVIDER_HTTP_REFUND_URL`.
+- **Never more than was paid.** A refund may be at most the payment's amount minus its `SUCCEEDED` and `PENDING` refunds; more gets `422 REFUND_EXCEEDS_REMAINING` (`Refund 30.00 exceeds the remaining refundable amount 20.00`, or `Payment is already fully refunded`). The payment row is locked while a refund is created, so refunds sent at the same time can't add up to more either. The amount has at most 2 decimals; `reason` is optional, up to 255 characters.
+- **The payment keeps its status.** A refunded payment stays `SUCCEEDED`; `refundedAmount` on the payment is the sum of its `SUCCEEDED` refunds (`0.00` when nothing was refunded).
+- **Refund statuses** work like payment statuses: `PENDING` while the provider's answer isn't known (it answered `PENDING`, failed or timed out), then `SUCCEEDED` or `DECLINED` (with `declineReason`) exactly once. A `PENDING` refund still counts against the remaining amount and is settled later by the provider's [webhook](#provider-webhooks) or by [re-checking](#re-checking-pending-payments). A declined refund frees its amount again.
+- **Idempotent retries** work as for payments: send an `Idempotency-Key`, and a retry with the same body returns the same refund with `Idempotent-Replayed: true` without calling the provider again; a different body gets `422 IDEMPOTENCY_KEY_REUSED`. Refund keys are separate from payment keys.
+- **Receipts.** The merchant gets an email and an SMS once a refund becomes final, after it's committed (`Refund 10.00 EUR succeeded`).
+- `GET /api/v1/payments/{id}/refunds` lists a payment's refunds, oldest first, and `GET /api/v1/payments/{id}/refunds/{refundId}` returns one. Another merchant's payment, or a refund of another payment, is `404`.
 
 ### Merchant administration
 
@@ -425,7 +460,7 @@ A payment is stored as `PENDING` and committed before its provider is called, th
 | `SUCCEEDED` | The provider approved the payment. Final. | sent |
 | `DECLINED` | The provider declined it; `declineReason` says why. Final. | sent |
 
-A payment moves from `PENDING` to `SUCCEEDED` or `DECLINED` once, either from the provider's answer to the payment request or later from the provider's [webhook](#provider-webhooks), whichever comes first; a final status never changes.
+A refunded payment keeps `SUCCEEDED`; its refunds are a resource of their own with the same three statuses (see [Refunds](#refunds)). A payment moves from `PENDING` to `SUCCEEDED` or `DECLINED` once, either from the provider's answer to the payment request or later from the provider's [webhook](#provider-webhooks), whichever comes first; a final status never changes.
 
 A payment stays `PENDING` when the provider's result is unknown: the provider answered `PENDING` (it confirms later, for example after a redirect), failed with an error, or didn't answer within its timeout. The merchant still gets `201` with status `PENDING` and the payment's `Location`. It gets no receipt yet, and is not charged again on an idempotent retry. A provider failure or timeout is logged as an error with the provider name and payment ID. The provider settles the payment through its webhook, or the service asks the provider again (see below), whichever happens first.
 
@@ -439,6 +474,8 @@ A webhook can get lost, and some providers send none. So a background job regula
 - **Alert.** A payment still `PENDING` after `PAYMENT_RECONCILIATION_ALERT_AFTER` (24 hours) is logged at `ERROR` on every check, with its ID, for example `Payment 4adb5fb6-… with provider http is still PENDING PT26H after it was created (check 9); check it with the provider`.
 - **Several instances.** Each run claims its payments with `SELECT … FOR UPDATE SKIP LOCKED` and moves their next check forward before calling the provider. Instances sharing the database therefore never ask about the same payment at the same time, and they don't wait for each other.
 - **Logs.** Each run that checked something logs one summary, for example `Checked 8 pending payments with their providers: 1 settled, 0 still pending, 7 failed`; a failed check is one `WARN` line with the cause.
+
+`PENDING` refunds are re-checked the same way, with the same settings and backoff, through `GET <status URL>?refundId=…` (log `Checked N pending refunds with their providers: …`, alert `Refund … of payment … is still PENDING …`).
 
 Payments of providers without status queries (`simulated`, `fixed`, or `http` without a status URL) are never checked; they are settled by the provider's answer or webhook. `GET /api/v1/payments?status=PENDING` lists everything still open. Set `PAYMENT_RECONCILIATION_ENABLED=false` to switch the job off.
 
@@ -454,6 +491,14 @@ A provider that leaves a payment `PENDING` reports the final result later by cal
 - A `PENDING` payment moves to `SUCCEEDED` or `DECLINED` (with `reason`) and its receipt is sent then. A `PENDING` webhook only stores the reference.
 - A payment moves once. A repeated webhook, or one that contradicts the final status, changes nothing (the contradiction is logged) and still returns `204`, so the provider stops retrying. The webhook and the provider's own late answer can't both settle a payment: both lock the row and only change it while it is `PENDING`.
 - `204` means accepted. `401 INVALID_WEBHOOK_SIGNATURE` means a missing or wrong signature, `400 INVALID_WEBHOOK` a signed body that isn't a valid webhook (unknown status, decline without reason, no reference), and `404 PAYMENT_NOT_FOUND` no matching payment yet (the provider should retry).
+
+Refund results use the same endpoint and signature, with `"type": "refund"` (a body without `type`, or with `"type": "payment"`, is a payment webhook; any other type is `400 INVALID_WEBHOOK`):
+
+```json
+{"type": "refund", "refundId": "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d", "status": "APPROVED", "reference": "acme_r_7"}
+```
+
+The refund is found by the provider's `reference` among that provider's refunds, or, while it has no reference yet, by `refundId`. It then moves once, exactly as a payment does; no match is `404 REFUND_NOT_FOUND`, so the provider retries.
 
 To set up webhooks for the `http` provider:
 
@@ -491,6 +536,10 @@ Errors are returned in a common format:
 | 406 | `NOT_ACCEPTABLE` | `Accept` header asks for a type the endpoint can't return (there is no body when JSON isn't accepted either) |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | Request body that isn't JSON; the `Accept` header lists the supported types |
 | 422 | `PAYMENT_RULE_VIOLATION` | Amount or currency not allowed for the payment method |
+| 404 | `REFUND_NOT_FOUND` | No such refund of that payment; for a refund webhook, no refund of that provider matches yet |
+| 409 | `PAYMENT_NOT_REFUNDABLE` | Refund of a payment that isn't `SUCCEEDED` |
+| 422 | `REFUND_EXCEEDS_REMAINING` | Refund larger than the payment's amount minus its `SUCCEEDED` and `PENDING` refunds |
+| 422 | `REFUND_NOT_SUPPORTED` | Refund of a payment whose provider can't refund |
 | 422 | `IDEMPOTENCY_KEY_REUSED` | `Idempotency-Key` already used with a different request body |
 | 429 | `TOO_MANY_REQUESTS` | Returned by the gateway when the API key, client IP or webhook sender is over the rate limit; see `Retry-After` |
 | 502 | `BAD_GATEWAY` | Returned by the gateway when `payment-service` drops the connection |
@@ -514,11 +563,16 @@ transactions   id, merchant_id, amount, currency, payment_method, status,
                idempotency_key, request_hash,
                provider, provider_reference,
                next_check_at, check_attempts
+refunds        id, transaction_id, merchant_id, amount, status, reason,
+               provider_reference, decline_reason, idempotency_key, request_hash,
+               created_at, processed_at, next_check_at, check_attempts
 ```
 
 Each transaction records which payment provider handled it (`provider`, for example `simulated`) and that provider's own transaction ID (`provider_reference`, empty if the provider returns none). Payments made before these columns existed are recorded as `simulated`. An index on (`provider`, `provider_reference`) serves the webhook lookup.
 
 `next_check_at` is when a `PENDING` payment is next checked with its provider and `check_attempts` how often it has been checked (see [Re-checking pending payments](#re-checking-pending-payments)). A final payment has no `next_check_at`; the database enforces this with a check constraint, and a partial index over `PENDING` rows lets the job find due payments quickly.
+
+A refund belongs to one payment and that payment's merchant: the foreign key covers (`transaction_id`, `merchant_id`) together, so a refund can't be stored for another merchant's payment. The amount must be greater than 0, an idempotency key is unique per merchant and always stored with its request hash, and the same `next_check_at` rule and partial indexes as for payments apply.
 
 To reset the local database:
 
@@ -561,12 +615,13 @@ alt-payment-gateway/
 │       ├── dto/              Request and response bodies
 │       ├── entity/           JPA entities and enums
 │       ├── error/            Exceptions and the common error format
-│       ├── event/            PaymentProcessedEvent
+│       ├── event/            PaymentProcessedEvent, RefundProcessedEvent
 │       ├── notification/     Receipt listener, email and SMS senders
-│       ├── provider/         Payment provider interface, registry, per-method router, simulated, fixed and HTTP providers, webhook contract
+│       ├── provider/         Payment provider interface, registry, per-method router, simulated, fixed and HTTP providers, webhook, status and refund contracts
+│       ├── reconciliation/   Scheduled re-checking of PENDING payments and refunds
 │       ├── repository/       Spring Data repositories
 │       ├── rules/            Per-method currency and amount rules
-│       └── service/          Payment processing and merchant administration
+│       └── service/          Payment processing, refunds and merchant administration
 ├── docker-compose.yml
 ├── docker-compose.scale.yml  Override for two gateway instances on ports 8080-8081
 ├── .env.example
