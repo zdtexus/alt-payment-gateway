@@ -37,6 +37,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.example.payment_service.auth.ApiKeyAuthFilter;
+import com.example.payment_service.entity.TransactionStatus;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.allOf;
@@ -142,6 +143,23 @@ class GlobalExceptionHandlerTests {
 
 		expectError(result, 422, "PAYMENT_RULE_VIOLATION", "Amount 600.00 exceeds BONUS limit 500.00",
 				"/test/payment-rule-violation");
+	}
+
+	@Test
+	void refundOfAPaymentThatIsNotSucceededReturns409() throws Exception {
+		ResultActions result = mvc.perform(get("/test/payment-not-refundable"));
+
+		expectError(result, 409, "PAYMENT_NOT_REFUNDABLE",
+				"Payment " + PAYMENT_ID + " is DECLINED; only SUCCEEDED payments can be refunded",
+				"/test/payment-not-refundable");
+	}
+
+	@Test
+	void refundAboveTheRemainingAmountReturns422() throws Exception {
+		ResultActions result = mvc.perform(get("/test/refund-exceeds-remaining"));
+
+		expectError(result, 422, "REFUND_EXCEEDS_REMAINING",
+				"Refund 30.00 exceeds the remaining refundable amount 20.00", "/test/refund-exceeds-remaining");
 	}
 
 	@Test
@@ -308,6 +326,16 @@ class GlobalExceptionHandlerTests {
 						new SQLException("duplicate key value violates unique constraint", "23505"));
 				default -> new CannotCreateTransactionException("Could not open JPA EntityManager " + DATABASE_DETAIL);
 			};
+		}
+
+		@GetMapping("/test/payment-not-refundable")
+		void paymentNotRefundable() {
+			throw new PaymentNotRefundableException(PAYMENT_ID, TransactionStatus.DECLINED);
+		}
+
+		@GetMapping("/test/refund-exceeds-remaining")
+		void refundExceedsRemaining() {
+			throw new RefundExceedsRemainingException(new BigDecimal("30.00"), new BigDecimal("20.00"));
 		}
 
 		@GetMapping("/test/refund-not-supported")

@@ -26,6 +26,9 @@ public interface TransactionRepository extends JpaRepository<Transaction, UUID> 
 	Optional<Transaction> findLockedById(UUID id);
 
 	@Lock(LockModeType.PESSIMISTIC_WRITE)
+	Optional<Transaction> findLockedByIdAndMerchantId(UUID id, UUID merchantId);
+
+	@Lock(LockModeType.PESSIMISTIC_WRITE)
 	Optional<Transaction> findLockedByProviderAndProviderReference(String provider, String providerReference);
 
 	Optional<Transaction> findByMerchantIdAndIdempotencyKey(UUID merchantId, String idempotencyKey);

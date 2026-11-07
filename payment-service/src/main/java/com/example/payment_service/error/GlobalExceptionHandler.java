@@ -94,6 +94,18 @@ public class GlobalExceptionHandler {
 		return error(HttpStatus.UNPROCESSABLE_CONTENT, "PAYMENT_RULE_VIOLATION", ex.getMessage(), request);
 	}
 
+	@ExceptionHandler(PaymentNotRefundableException.class)
+	ResponseEntity<ErrorResponse> handlePaymentNotRefundable(PaymentNotRefundableException ex,
+			HttpServletRequest request) {
+		return error(HttpStatus.CONFLICT, "PAYMENT_NOT_REFUNDABLE", ex.getMessage(), request);
+	}
+
+	@ExceptionHandler(RefundExceedsRemainingException.class)
+	ResponseEntity<ErrorResponse> handleRefundExceedsRemaining(RefundExceedsRemainingException ex,
+			HttpServletRequest request) {
+		return error(HttpStatus.UNPROCESSABLE_CONTENT, "REFUND_EXCEEDS_REMAINING", ex.getMessage(), request);
+	}
+
 	@ExceptionHandler(RefundNotSupportedException.class)
 	ResponseEntity<ErrorResponse> handleRefundNotSupported(RefundNotSupportedException ex,
 			HttpServletRequest request) {
