@@ -22,7 +22,9 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import com.example.payment_service.entity.CaptureMethod;
 import com.example.payment_service.entity.Merchant;
+import com.example.payment_service.entity.PendingAction;
 import com.example.payment_service.entity.PaymentMethod;
 import com.example.payment_service.entity.Refund;
 import com.example.payment_service.entity.RefundStatus;
@@ -190,7 +192,7 @@ class RefundServiceTests {
 	}
 
 	@ParameterizedTest
-	@EnumSource(value = TransactionStatus.class, names = { "PENDING", "DECLINED" })
+	@EnumSource(value = TransactionStatus.class, names = { "PENDING", "DECLINED", "VOIDED" })
 	void onlySucceededPaymentsCanBeRefunded(TransactionStatus status) {
 		payment.setStatus(status);
 
@@ -198,6 +200,59 @@ class RefundServiceTests {
 			.isThrownBy(() -> refundService.create(merchant, PAYMENT_ID, null, null, null))
 			.withMessage("Payment " + PAYMENT_ID + " is " + status + "; only SUCCEEDED payments can be refunded");
 		verify(refundRepository, never()).saveAndFlush(any());
+	}
+
+	@Test
+	void anAuthorizedPaymentMustBeCapturedFirst() {
+		payment.setStatus(TransactionStatus.AUTHORIZED);
+		payment.setCaptureMethod(CaptureMethod.MANUAL);
+
+		assertThatExceptionOfType(PaymentNotRefundableException.class)
+			.isThrownBy(() -> refundService.create(merchant, PAYMENT_ID, null, null, null))
+			.withMessage("Payment " + PAYMENT_ID + " is AUTHORIZED; capture it before refunding it, "
+					+ "or void it to release the reserved amount");
+		payment.setPendingAction(PendingAction.CAPTURE);
+		assertThatExceptionOfType(PaymentNotRefundableException.class)
+			.isThrownBy(() -> refundService.create(merchant, PAYMENT_ID, null, null, null));
+		verify(refundRepository, never()).saveAndFlush(any());
+		verifyNoInteractions(provider);
+	}
+
+	@Test
+	void aCapturedPaymentIsRefundableUpToTheCapturedAmount() {
+		capturedFor("30.00");
+
+		assertThatExceptionOfType(RefundExceedsRemainingException.class)
+			.isThrownBy(() -> refundService.create(merchant, PAYMENT_ID, new BigDecimal("30.01"), null, null))
+			.withMessage("Refund 30.01 exceeds the remaining refundable amount 30.00");
+		assertThat(refundService.create(merchant, PAYMENT_ID, null, null, null).refund().amount())
+			.isEqualTo(new BigDecimal("30.00"));
+	}
+
+	@Test
+	void reservedRefundsCountAgainstTheCapturedAmount() {
+		capturedFor("30.00");
+		given(refundRepository.sumAmount(eq(PAYMENT_ID), any())).willReturn(new BigDecimal("25.00"));
+
+		assertThatExceptionOfType(RefundExceedsRemainingException.class)
+			.isThrownBy(() -> refundService.create(merchant, PAYMENT_ID, new BigDecimal("5.01"), null, null))
+			.withMessage("Refund 5.01 exceeds the remaining refundable amount 5.00");
+		assertThat(refundService.create(merchant, PAYMENT_ID, null, null, null).refund().amount())
+			.isEqualTo(new BigDecimal("5.00"));
+	}
+
+	@Test
+	void aFullyCapturedPaymentIsRefundableInFull() {
+		capturedFor("50.00");
+
+		assertThat(refundService.create(merchant, PAYMENT_ID, null, null, null).refund().amount())
+			.isEqualTo(new BigDecimal("50.00"));
+	}
+
+	private void capturedFor(String captured) {
+		payment.setCaptureMethod(CaptureMethod.MANUAL);
+		payment.setAuthorizedAmount(new BigDecimal("50.00"));
+		payment.setCapturedAmount(new BigDecimal(captured));
 	}
 
 	@Test

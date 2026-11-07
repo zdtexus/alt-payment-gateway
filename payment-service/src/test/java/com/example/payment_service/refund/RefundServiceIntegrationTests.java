@@ -214,6 +214,59 @@ class RefundServiceIntegrationTests {
 		assertThat(refunded(payment)).isEqualTo(new BigDecimal("50.00"));
 	}
 
+	@Test
+	void concurrentRefundsNeverExceedTheCapturedAmount() throws Exception {
+		UUID captured = manualPayment("SUCCEEDED", "30.00");
+		CyclicBarrier start = new CyclicBarrier(10);
+		List<Future<Boolean>> attempts = new ArrayList<>();
+		for (int i = 0; i < 10; i++) {
+			attempts.add(executor.submit(() -> {
+				start.await(10, TimeUnit.SECONDS);
+				try {
+					refundService.create(merchant, captured, new BigDecimal("5.00"), null, null);
+					return true;
+				}
+				catch (RefundExceedsRemainingException ex) {
+					return false;
+				}
+			}));
+		}
+
+		int succeeded = 0;
+		for (Future<Boolean> attempt : attempts) {
+			succeeded += attempt.get(30, TimeUnit.SECONDS) ? 1 : 0;
+		}
+
+		assertThat(succeeded).isEqualTo(6);
+		assertThat(refunded(captured)).isEqualTo(new BigDecimal("30.00"));
+	}
+
+	@Test
+	void authorizedAndVoidedPaymentsCannotBeRefunded() {
+		UUID authorized = manualPayment("AUTHORIZED", null);
+		UUID voided = manualPayment("VOIDED", null);
+
+		assertThatExceptionOfType(PaymentNotRefundableException.class)
+			.isThrownBy(() -> refundService.create(merchant, authorized, null, null, null))
+			.withMessageContaining("is AUTHORIZED; capture it before refunding it");
+		assertThatExceptionOfType(PaymentNotRefundableException.class)
+			.isThrownBy(() -> refundService.create(merchant, voided, null, null, null))
+			.withMessageContaining("is VOIDED; only SUCCEEDED payments can be refunded");
+		assertThat(refundCount(authorized) + refundCount(voided)).isZero();
+	}
+
+	private UUID manualPayment(String status, String captured) {
+		UUID id = UUID.randomUUID();
+		jdbcTemplate.update("""
+				INSERT INTO transactions (id, merchant_id, amount, currency, payment_method, status, provider,
+				                          provider_reference, capture_method, authorized_amount, captured_amount,
+				                          authorization_expires_at)
+				VALUES (?, ?, 50.00, 'EUR', 'CARD', ?, 'simulated', ?, 'MANUAL', 50.00, ?::numeric,
+				        now() + interval '7 days')
+				""", id, DEMO_MERCHANT_ID, status, "sim_a_" + id, captured);
+		return id;
+	}
+
 	private UUID payment(UUID merchantId, String status, String provider) {
 		UUID id = UUID.randomUUID();
 		jdbcTemplate.update("""

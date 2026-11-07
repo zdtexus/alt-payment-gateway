@@ -195,7 +195,7 @@ class AuthorizationReconciliationIntegrationTests {
 		stub.capture = () -> ProviderResult.pending("stub_c_1");
 		captureService.capture(demoMerchant(), id, null, null);
 		jdbcTemplate.update("UPDATE transactions SET action_requested_at = now() - interval '25 hours', "
-				+ "next_check_at = now() WHERE id = ?", id);
+				+ "next_check_at = now() - interval '1 minute' WHERE id = ?", id);
 
 		reconciler.reconcileDuePayments();
 
@@ -282,7 +282,7 @@ class AuthorizationReconciliationIntegrationTests {
 		stub.capture = () -> ProviderResult.pending("stub_c_1");
 		captureService.capture(demoMerchant(), id, null, null);
 		jdbcTemplate.update("UPDATE transactions SET authorization_expires_at = now() - interval '1 minute', "
-				+ "next_check_at = now() WHERE id = ?", id);
+				+ "next_check_at = now() - interval '1 minute' WHERE id = ?", id);
 
 		reconciler.reconcileDuePayments();
 
@@ -299,7 +299,7 @@ class AuthorizationReconciliationIntegrationTests {
 	}
 
 	private void makeDue(UUID id) {
-		jdbcTemplate.update("UPDATE transactions SET next_check_at = now() WHERE id = ? AND next_check_at IS NOT NULL",
+		jdbcTemplate.update("UPDATE transactions SET next_check_at = now() - interval '1 minute' WHERE id = ? AND next_check_at IS NOT NULL",
 				id);
 	}
 

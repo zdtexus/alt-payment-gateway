@@ -112,6 +112,10 @@ public class Transaction {
 	@Column(name = "action_requested_at")
 	private Instant actionRequestedAt;
 
+	public BigDecimal chargedAmount() {
+		return (capturedAmount != null) ? capturedAmount : amount;
+	}
+
 	@PrePersist
 	void onCreate() {
 		if (createdAt == null) {

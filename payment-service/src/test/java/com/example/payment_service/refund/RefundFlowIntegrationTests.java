@@ -165,6 +165,58 @@ class RefundFlowIntegrationTests {
 	}
 
 	@Test
+	void aManualPaymentIsRefundableOnlyAfterItsCaptureAndUpToTheCapturedAmount() throws Exception {
+		String manual = createManual();
+		mvc.perform(post(manual + "/refunds").header("X-API-Key", DEMO_KEY))
+			.andExpect(status().isConflict())
+			.andExpect(jsonPath("$.error").value("PAYMENT_NOT_REFUNDABLE"))
+			.andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("capture it before refunding it")));
+		mvc.perform(post(manual + "/capture").header("X-API-Key", DEMO_KEY)
+			.contentType(MediaType.APPLICATION_JSON)
+			.content("{\"amount\": 30.00}")).andExpect(status().isOk());
+
+		refund(manual, "{\"amount\": 20.00}").andExpect(status().isCreated());
+		refund(manual, "{\"amount\": 10.01}").andExpect(status().isUnprocessableContent())
+			.andExpect(jsonPath("$.message").value("Refund 10.01 exceeds the remaining refundable amount 10.00"));
+		refund(manual, "{}").andExpect(status().isCreated()).andExpect(jsonPath("$.amount").value(10.00));
+		refund(manual, "{}").andExpect(status().isUnprocessableContent())
+			.andExpect(jsonPath("$.message").value("Payment is already fully refunded"));
+
+		mvc.perform(get(manual).header("X-API-Key", DEMO_KEY))
+			.andExpect(jsonPath("$.status").value("SUCCEEDED"))
+			.andExpect(jsonPath("$.amount").value(50.00))
+			.andExpect(jsonPath("$.capturedAmount").value(30.00))
+			.andExpect(jsonPath("$.refundedAmount").value(30.00));
+	}
+
+	@Test
+	void aVoidedPaymentCannotBeRefunded() throws Exception {
+		String manual = createManual();
+		mvc.perform(post(manual + "/void").header("X-API-Key", DEMO_KEY)).andExpect(status().isOk());
+
+		refund(manual, "{}").andExpect(status().isConflict())
+			.andExpect(jsonPath("$.error").value("PAYMENT_NOT_REFUNDABLE"))
+			.andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("is VOIDED")));
+		mvc.perform(get(manual + "/refunds").header("X-API-Key", DEMO_KEY)).andExpect(jsonPath("$.length()").value(0));
+	}
+
+	private String createManual() throws Exception {
+		MvcResult result = mvc.perform(post("/api/v1/payments").header("X-API-Key", DEMO_KEY)
+			.contentType(MediaType.APPLICATION_JSON)
+			.content("{\"amount\": 50.00, \"currency\": \"EUR\", \"paymentMethod\": \"CARD\", \"captureMethod\": \"MANUAL\"}"))
+			.andExpect(status().isCreated())
+			.andExpect(jsonPath("$.status").value("AUTHORIZED"))
+			.andReturn();
+		return "/api/v1/payments/" + JsonPath.read(result.getResponse().getContentAsString(), "$.id");
+	}
+
+	private org.springframework.test.web.servlet.ResultActions refund(String paymentPath, String body) throws Exception {
+		return mvc.perform(post(paymentPath + "/refunds").header("X-API-Key", DEMO_KEY)
+			.contentType(MediaType.APPLICATION_JSON)
+			.content(body));
+	}
+
+	@Test
 	void anUnknownRefundIsNotFound() throws Exception {
 		UUID unknown = UUID.randomUUID();
 
