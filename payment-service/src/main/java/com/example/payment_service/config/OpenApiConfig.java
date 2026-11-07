@@ -48,10 +48,23 @@ public class OpenApiConfig {
 				Merchant administration endpoints under `/admin/v1` use the `X-Admin-Key` header instead. \
 				A merchant key never opens them, and the admin key never opens the payments API.
 
-				A payment is `PENDING` until its provider's result is known, then `SUCCEEDED` or `DECLINED`, 				and a final status never changes. Most payments are final in the create response; a provider that 				confirms later, fails or times out leaves the payment `PENDING` until it reports the result 				through `POST /api/v1/providers/{name}/webhook`. That endpoint is for payment providers: 				it needs no API key and is authenticated by an HMAC signature. 				Receipts are sent when a payment becomes final.
+				A payment is `PENDING` until its provider's result is known, then `SUCCEEDED` or `DECLINED`, \
+				and a final status never changes. Most payments are final in the create response; a provider that \
+				confirms later, fails or times out leaves the payment `PENDING` until it reports the result \
+				through `POST /api/v1/providers/{name}/webhook`. That endpoint is for payment providers: \
+				it needs no API key and is authenticated by an HMAC signature. \
+				Receipts are sent when a payment becomes final.
 
 				%s
-				Errors use one format: `timestamp`, `status`, `error`, `message`, `path`.
+				Errors use one format: `timestamp`, `status`, `error`, `message`, `path`. \
+				Besides the responses listed on each operation, any endpoint can return:
+
+				- `500 INTERNAL_SERVER_ERROR` for an unexpected failure. The message is always \
+				"Internal Server Error"; details are only logged.
+				- `503 SERVICE_UNAVAILABLE` with a `Retry-After` header (seconds) while the database is \
+				unavailable. Retry the request after that delay.
+				- `404`, `405`, `406` or `415` for an unknown path, method, response type or content type, \
+				with the status name as `error`.
 				""".formatted(paymentRulesTable()));
 		return new OpenAPI().info(info)
 			.addServersItem(new Server().url("/"))

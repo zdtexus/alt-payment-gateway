@@ -10,10 +10,8 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.http.server.PathContainer;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.CannotCreateTransactionException;
 import org.springframework.util.StringUtils;
 import org.springframework.web.filter.OncePerRequestFilter;
 import org.springframework.web.servlet.HandlerExceptionResolver;
@@ -22,6 +20,7 @@ import org.springframework.web.util.pattern.PathPatternParser;
 
 import com.example.payment_service.entity.Merchant;
 import com.example.payment_service.entity.MerchantStatus;
+import com.example.payment_service.error.DatabaseOutage;
 import com.example.payment_service.error.InvalidApiKeyException;
 import com.example.payment_service.error.MerchantSuspendedException;
 import com.example.payment_service.repository.MerchantRepository;
@@ -62,8 +61,14 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
 		try {
 			merchant = authenticate(request);
 		}
-		catch (InvalidApiKeyException | MerchantSuspendedException | DataAccessResourceFailureException
-				| CannotCreateTransactionException ex) {
+		catch (InvalidApiKeyException | MerchantSuspendedException ex) {
+			exceptionResolver.resolveException(request, response, null, ex);
+			return;
+		}
+		catch (RuntimeException ex) {
+			if (!DatabaseOutage.causedBy(ex)) {
+				throw ex;
+			}
 			exceptionResolver.resolveException(request, response, null, ex);
 			return;
 		}

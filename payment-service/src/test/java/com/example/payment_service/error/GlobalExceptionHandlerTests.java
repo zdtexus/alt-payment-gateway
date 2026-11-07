@@ -19,10 +19,12 @@ import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.context.annotation.FilterType;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.CannotGetJdbcConnectionException;
+import org.springframework.orm.jpa.JpaSystemException;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.transaction.CannotCreateTransactionException;
@@ -202,7 +204,7 @@ class GlobalExceptionHandlerTests {
 	}
 
 	@ParameterizedTest
-	@ValueSource(strings = { "resource", "connection", "transaction" })
+	@ValueSource(strings = { "resource", "connection", "transaction", "rollback" })
 	void databaseOutageReturns503WithRetryAfter(String kind, CapturedOutput output) throws Exception {
 		ResultActions result = mvc.perform(get("/test/database/" + kind));
 
@@ -211,6 +213,14 @@ class GlobalExceptionHandlerTests {
 			.andExpect(content().string(not(containsString("jdbc:"))))
 			.andExpect(content().string(not(containsString("Exception"))));
 		assertThat(output).contains("ERROR").contains("Database unavailable on GET /test/database/" + kind);
+	}
+
+	@Test
+	void otherDatabaseErrorStays500() throws Exception {
+		ResultActions result = mvc.perform(get("/test/database/constraint"));
+
+		expectError(result, 500, "INTERNAL_SERVER_ERROR", "Internal Server Error", "/test/database/constraint");
+		result.andExpect(header().doesNotExist("Retry-After"));
 	}
 
 	private static void expectError(ResultActions result, int status, String error, String message, String path)
@@ -284,6 +294,10 @@ class GlobalExceptionHandlerTests {
 				case "resource" -> new DataAccessResourceFailureException("Connection refused " + DATABASE_DETAIL);
 				case "connection" -> new CannotGetJdbcConnectionException("Failed to obtain JDBC Connection",
 						new SQLException("Connection refused " + DATABASE_DETAIL));
+				case "rollback" -> new JpaSystemException(new RuntimeException("Unable to rollback against JDBC Connection",
+						new SQLException("Connection is closed")));
+				case "constraint" -> new DataIntegrityViolationException("duplicate key",
+						new SQLException("duplicate key value violates unique constraint", "23505"));
 				default -> new CannotCreateTransactionException("Could not open JPA EntityManager " + DATABASE_DETAIL);
 			};
 		}

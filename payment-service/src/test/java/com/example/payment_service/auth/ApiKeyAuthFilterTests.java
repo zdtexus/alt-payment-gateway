@@ -15,6 +15,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.CannotGetJdbcConnectionException;
+import org.springframework.orm.jpa.JpaSystemException;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
@@ -26,6 +27,7 @@ import com.example.payment_service.entity.Merchant;
 import com.example.payment_service.entity.MerchantStatus;
 import com.example.payment_service.repository.MerchantRepository;
 
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -117,7 +119,19 @@ class ApiKeyAuthFilterTests {
 		return Stream.of(new DataAccessResourceFailureException("Connection refused"),
 				new CannotGetJdbcConnectionException("Failed to obtain JDBC Connection",
 						new SQLException("Connection refused")),
-				new CannotCreateTransactionException("Could not open JPA EntityManager"));
+				new CannotCreateTransactionException("Could not open JPA EntityManager"),
+				new JpaSystemException(new RuntimeException("Unable to rollback against JDBC Connection",
+						new SQLException("Connection is closed"))));
+	}
+
+	@Test
+	void otherExceptionDuringKeyCheckIsNotTurnedInto503() {
+		given(merchantRepository.findByApiKeyHash(ApiKeyHasher.hash("active-key")))
+			.willThrow(new IllegalStateException("bug"));
+
+		assertThatThrownBy(() -> mvc.perform(get("/api/v1/test").header("X-API-Key", "active-key")))
+			.isInstanceOf(IllegalStateException.class)
+			.hasMessage("bug");
 	}
 
 	@ParameterizedTest

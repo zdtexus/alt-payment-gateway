@@ -141,6 +141,7 @@ Services are configured through environment variables. Defaults are suitable for
 | `DB_URL` | payment-service | `jdbc:postgresql://localhost:5432/payments` | JDBC connection URL |
 | `DB_USER` | payment-service | `payments` | Database user |
 | `DB_PASSWORD` | payment-service | `payments` | Database password |
+| `DB_CONNECTION_TIMEOUT_MS` | payment-service | `3000` | How long a request waits for a database connection before it fails with `503` (`spring.datasource.hikari.connection-timeout`) |
 | `MAIL_HOST` | payment-service | `localhost` | SMTP host |
 | `MAIL_PORT` | payment-service | `1025` | SMTP port |
 | `MAIL_TIMEOUT_MS` | payment-service | `5000` | SMTP connect, read and write timeout in milliseconds |
@@ -397,11 +398,20 @@ Errors are returned in a common format:
 | 404 | `PAYMENT_NOT_FOUND` | Payment does not exist or belongs to another merchant; for a webhook, no payment of that provider matches yet |
 | 404 | `PROVIDER_NOT_FOUND` | Webhook for a provider that doesn't exist or doesn't accept webhooks |
 | 404 | `MERCHANT_NOT_FOUND` | Admin endpoint called with an unknown merchant id |
+| 404 | `NOT_FOUND` | Unknown path |
+| 405 | `METHOD_NOT_ALLOWED` | HTTP method not supported on the path; the `Allow` header lists the supported ones |
+| 406 | `NOT_ACCEPTABLE` | `Accept` header asks for a type the endpoint can't return (there is no body when JSON isn't accepted either) |
+| 415 | `UNSUPPORTED_MEDIA_TYPE` | Request body that isn't JSON; the `Accept` header lists the supported types |
 | 422 | `PAYMENT_RULE_VIOLATION` | Amount or currency not allowed for the payment method |
 | 422 | `IDEMPOTENCY_KEY_REUSED` | `Idempotency-Key` already used with a different request body |
 | 429 | `TOO_MANY_REQUESTS` | Returned by the gateway when the API key, client IP or webhook sender is over the rate limit; see `Retry-After` |
 | 502 | `BAD_GATEWAY` | Returned by the gateway when `payment-service` drops the connection |
-| 503 | `SERVICE_UNAVAILABLE` | Returned by the gateway when `payment-service` cannot be reached |
+| 500 | `INTERNAL_SERVER_ERROR` | Unexpected failure in `payment-service`. The message is always `Internal Server Error`; the details are logged at `ERROR` with the request path |
+| 503 | `SERVICE_UNAVAILABLE` | The database is unavailable (message `Database is unavailable`, header `Retry-After: 5`), or, from the gateway, `payment-service` cannot be reached |
+
+Codes without their own name (`NOT_FOUND`, `METHOD_NOT_ALLOWED`, `INTERNAL_SERVER_ERROR`, …) are the HTTP status name, and their message is the standard reason phrase. This also applies to errors raised before a controller runs, for example in the API key check or for an unknown path. A message never contains exception text, SQL or connection details.
+
+While the database is down, every request that needs it gets `503` after at most `DB_CONNECTION_TIMEOUT_MS`. That includes the API key check and a request whose connection is lost halfway through, for example when the rollback fails. The log has one line per request: `Database unavailable on GET /api/v1/payments: <cause>`. Requests work again as soon as the database is back; no restart is needed.
 
 ## Database
 

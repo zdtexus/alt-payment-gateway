@@ -126,6 +126,27 @@ class OpenApiDocsTests {
 	}
 
 	@Test
+	void documentsInternalAndUnavailableErrorsOnceForAllEndpoints() throws Exception {
+		mvc.perform(get("/v3/api-docs"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.info.description", containsString("`500 INTERNAL_SERVER_ERROR`")))
+			.andExpect(jsonPath("$.info.description", containsString("\"Internal Server Error\"")))
+			.andExpect(jsonPath("$.info.description",
+					containsString("`503 SERVICE_UNAVAILABLE` with a `Retry-After` header")))
+			.andExpect(jsonPath("$.paths.*.*.responses['500']", empty()))
+			.andExpect(jsonPath("$.paths.*.*.responses['503']", empty()));
+	}
+
+	@Test
+	void descriptionHasNoStrayTabs() throws Exception {
+		mvc.perform(get("/v3/api-docs"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.info.description", not(containsString("	"))))
+			.andExpect(jsonPath("$.info.description",
+					containsString("`DECLINED`, and a final status never changes.")));
+	}
+
+	@Test
 	void documentsCreatePaymentResponsesAndExamples() throws Exception {
 		String create = "$.paths['/api/v1/payments'].post";
 		mvc.perform(get("/v3/api-docs"))
