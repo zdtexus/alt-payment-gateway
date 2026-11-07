@@ -6,7 +6,7 @@ import java.util.Set;
 public record PaymentMethodRule(Set<String> currencies, BigDecimal minAmount, BigDecimal maxAmount) {
 
 	public PaymentMethodRule {
-		currencies = Set.copyOf(currencies);
+		currencies = (currencies != null) ? Set.copyOf(currencies) : Set.of();
 	}
 
 }

@@ -41,6 +41,23 @@ payment:
       connect-timeout: ${PAYMENT_PROVIDER_HTTP_CONNECT_TIMEOUT:2s}
       read-timeout: ${PAYMENT_PROVIDER_HTTP_READ_TIMEOUT:10s}
       webhook-secret: ${PAYMENT_PROVIDER_HTTP_WEBHOOK_SECRET:}
+  rules:
+    CARD:
+      currencies: ${PAYMENT_RULES_CARD_CURRENCIES:EUR,USD,PLN,UAH}
+      min-amount: ${PAYMENT_RULES_CARD_MIN_AMOUNT:0.50}
+      max-amount: ${PAYMENT_RULES_CARD_MAX_AMOUNT:10000.00}
+    BONUS:
+      currencies: ${PAYMENT_RULES_BONUS_CURRENCIES:EUR}
+      min-amount: ${PAYMENT_RULES_BONUS_MIN_AMOUNT:0.01}
+      max-amount: ${PAYMENT_RULES_BONUS_MAX_AMOUNT:500.00}
+    CRYPTO:
+      currencies: ${PAYMENT_RULES_CRYPTO_CURRENCIES:EUR,USD}
+      min-amount: ${PAYMENT_RULES_CRYPTO_MIN_AMOUNT:1.00}
+      max-amount: ${PAYMENT_RULES_CRYPTO_MAX_AMOUNT:5000.00}
+    KVIK:
+      currencies: ${PAYMENT_RULES_KVIK_CURRENCIES:EUR,PLN}
+      min-amount: ${PAYMENT_RULES_KVIK_MIN_AMOUNT:0.50}
+      max-amount: ${PAYMENT_RULES_KVIK_MAX_AMOUNT:2000.00}
 
 notification:
   email:
