@@ -91,6 +91,18 @@ class HttpPaymentProviderTests {
 				out.write(bytes);
 			}
 		});
+		server.createContext("/refund", (exchange) -> {
+			method.set(exchange.getRequestMethod());
+			authorization.set(exchange.getRequestHeaders().getFirst("Authorization"));
+			idempotencyKey.set(exchange.getRequestHeaders().getFirst("Idempotency-Key"));
+			body.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+			byte[] bytes = responseBody.getBytes(StandardCharsets.UTF_8);
+			exchange.getResponseHeaders().set("Content-Type", "application/json");
+			exchange.sendResponseHeaders(responseStatus, (bytes.length == 0) ? -1 : bytes.length);
+			try (OutputStream out = exchange.getResponseBody()) {
+				out.write(bytes);
+			}
+		});
 		server.createContext("/status", (exchange) -> {
 			method.set(exchange.getRequestMethod());
 			authorization.set(exchange.getRequestHeaders().getFirst("Authorization"));
@@ -224,7 +236,7 @@ class HttpPaymentProviderTests {
 		}
 		HttpPaymentProvider provider = new HttpPaymentProvider(new HttpPaymentProviderProperties(
 				URI.create("http://localhost:" + closedPort + "/pay"), null, Duration.ofSeconds(1),
-				Duration.ofSeconds(1), null, null));
+				Duration.ofSeconds(1), null, null, null));
 
 		assertThatExceptionOfType(ResourceAccessException.class).isThrownBy(() -> provider.process(REQUEST));
 	}
@@ -232,7 +244,7 @@ class HttpPaymentProviderTests {
 	@Test
 	void usesConfiguredConnectTimeout() {
 		HttpPaymentProviderProperties properties = new HttpPaymentProviderProperties(URI.create("http://localhost"),
-				null, Duration.ofMillis(750), Duration.ofSeconds(10), null, null);
+				null, Duration.ofMillis(750), Duration.ofSeconds(10), null, null, null);
 
 		assertThat(HttpPaymentProvider.httpClient(properties).connectTimeout()).hasValue(Duration.ofMillis(750));
 	}
@@ -343,7 +355,7 @@ class HttpPaymentProviderTests {
 		URI url = URI.create("http://localhost:" + server.getAddress().getPort() + "/pay");
 		URI status = URI.create("http://localhost:" + server.getAddress().getPort() + "/status?merchant=demo");
 		new HttpPaymentProvider(new HttpPaymentProviderProperties(url, null, Duration.ofSeconds(2),
-				Duration.ofSeconds(5), null, status))
+				Duration.ofSeconds(5), null, status, null))
 			.checkStatus(new ProviderStatusRequest(PAYMENT_ID, "ref with space&more"));
 
 		assertThat(statusQuery).hasValue("merchant=demo&paymentId=" + PAYMENT_ID + "&reference=ref%20with%20space%26more");
@@ -410,17 +422,134 @@ class HttpPaymentProviderTests {
 			.withMessage("paymentId is required");
 	}
 
+	private static final UUID REFUND_ID = UUID.fromString("0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d");
+
+	private static final RefundRequest REFUND = new RefundRequest(REFUND_ID, PAYMENT_ID, "acme_1", "EUR",
+			new BigDecimal("20.00"));
+
+	@Test
+	void refundIsAPostWithTheRefundIdAsIdempotencyKey() {
+		refundProvider("secret").refund(REFUND);
+
+		assertThat(method).hasValue("POST");
+		assertThat(authorization).hasValue("Bearer secret");
+		assertThat(idempotencyKey).hasValue(REFUND_ID.toString());
+		assertThat(body.get()).contains("\"refundId\":\"" + REFUND_ID + "\"")
+			.contains("\"paymentId\":\"" + PAYMENT_ID + "\"")
+			.contains("\"paymentReference\":\"acme_1\"")
+			.contains("\"currency\":\"EUR\"")
+			.contains("\"amount\":20.00");
+	}
+
+	@Test
+	void refundAnswersUseThePaymentAnswerFormat() {
+		HttpPaymentProvider provider = refundProvider("secret");
+
+		responseBody = """
+				{"status":"APPROVED","reference":"acme_r_1"}""";
+		assertThat(provider.refund(REFUND)).isEqualTo(ProviderResult.approved("acme_r_1"));
+		responseBody = """
+				{"status":"DECLINED","reference":"acme_r_2","reason":"Card account closed"}""";
+		assertThat(provider.refund(REFUND)).isEqualTo(ProviderResult.declined("Card account closed", "acme_r_2"));
+		responseBody = """
+				{"status":"PENDING","reference":"acme_r_3"}""";
+		assertThat(provider.refund(REFUND)).isEqualTo(ProviderResult.pending("acme_r_3"));
+	}
+
+	@ParameterizedTest
+	@ValueSource(strings = { "{\"status\":\"MAYBE\"}", "{}", "" })
+	void untrustedRefundAnswerIsThrown(String answer) {
+		responseBody = answer;
+
+		assertThatExceptionOfType(RuntimeException.class).isThrownBy(() -> refundProvider("secret").refund(REFUND));
+	}
+
+	@Test
+	void refundErrorStatusIsThrown() {
+		responseStatus = 500;
+
+		assertThatExceptionOfType(HttpServerErrorException.class)
+			.isThrownBy(() -> refundProvider("secret").refund(REFUND));
+	}
+
+	@Test
+	void withoutRefundUrlTheProviderDoesNotRefund() {
+		HttpPaymentProvider provider = provider("secret", Duration.ofSeconds(5));
+
+		assertThat(provider.supportsRefunds()).isFalse();
+		assertThatIllegalStateException().isThrownBy(() -> provider.refund(REFUND))
+			.withMessage("Payment provider http has no refund URL");
+		assertThat(method).hasValue(null);
+		assertThat(refundProvider("secret").supportsRefunds()).isTrue();
+	}
+
+	@Test
+	void refundStatusQueryNamesTheRefundAndThePayment() {
+		statusProvider("secret", Duration.ofSeconds(5))
+			.checkRefundStatus(new RefundStatusRequest(REFUND_ID, PAYMENT_ID, "acme_r_1"));
+
+		assertThat(method).hasValue("GET");
+		assertThat(statusQuery).hasValue("refundId=" + REFUND_ID + "&paymentId=" + PAYMENT_ID + "&reference=acme_r_1");
+		assertThat(authorization).hasValue("Bearer secret");
+	}
+
+	@Test
+	void refundStatusQueryWithoutReferenceAndWithoutStatusUrl() {
+		statusProvider(null, Duration.ofSeconds(5)).checkRefundStatus(new RefundStatusRequest(REFUND_ID, PAYMENT_ID, null));
+
+		assertThat(statusQuery).hasValue("refundId=" + REFUND_ID + "&paymentId=" + PAYMENT_ID);
+		assertThatIllegalStateException().isThrownBy(() -> provider("secret", Duration.ofSeconds(5))
+			.checkRefundStatus(new RefundStatusRequest(REFUND_ID, PAYMENT_ID, null)));
+	}
+
+	@Test
+	void readsSignedRefundWebhook() {
+		byte[] body = ("{\"type\":\"refund\",\"refundId\":\"" + REFUND_ID
+				+ "\",\"status\":\"APPROVED\",\"reference\":\"acme_r_1\"}").getBytes(StandardCharsets.UTF_8);
+
+		ProviderWebhook webhook = webhookProvider().readWebhook(body, HttpPaymentProvider.sign(WEBHOOK_SECRET, body));
+
+		assertThat(webhook).isEqualTo(ProviderWebhook.refund(REFUND_ID, ProviderResult.approved("acme_r_1")));
+		assertThat(webhook.type()).isEqualTo(ProviderWebhook.Type.REFUND);
+	}
+
+	@Test
+	void aWebhookOfTypePaymentIsAPaymentWebhook() {
+		byte[] body = webhookBody("""
+				{"type":"payment","paymentId":"%s","status":"APPROVED","reference":"acme_1"}""");
+
+		assertThat(webhookProvider().readWebhook(body, HttpPaymentProvider.sign(WEBHOOK_SECRET, body)))
+			.isEqualTo(new ProviderWebhook(PAYMENT_ID, ProviderResult.approved("acme_1")));
+	}
+
+	@Test
+	void anUnknownWebhookTypeIsInvalid() {
+		byte[] body = webhookBody("""
+				{"type":"chargeback","paymentId":"%s","status":"APPROVED","reference":"acme_1"}""");
+
+		assertThatExceptionOfType(InvalidWebhookException.class)
+			.isThrownBy(() -> webhookProvider().readWebhook(body, HttpPaymentProvider.sign(WEBHOOK_SECRET, body)))
+			.withMessage("Unknown webhook type 'chargeback'");
+	}
+
+	private HttpPaymentProvider refundProvider(String apiKey) {
+		URI url = URI.create("http://localhost:" + server.getAddress().getPort() + "/pay");
+		URI refund = URI.create("http://localhost:" + server.getAddress().getPort() + "/refund");
+		return new HttpPaymentProvider(new HttpPaymentProviderProperties(url, apiKey, Duration.ofSeconds(2),
+				Duration.ofSeconds(5), null, null, refund));
+	}
+
 	private HttpPaymentProvider statusProvider(String apiKey, Duration readTimeout) {
 		URI url = URI.create("http://localhost:" + server.getAddress().getPort() + "/pay");
 		URI status = URI.create("http://localhost:" + server.getAddress().getPort() + "/status");
 		return new HttpPaymentProvider(
-				new HttpPaymentProviderProperties(url, apiKey, Duration.ofSeconds(2), readTimeout, null, status));
+				new HttpPaymentProviderProperties(url, apiKey, Duration.ofSeconds(2), readTimeout, null, status, null));
 	}
 
 	private HttpPaymentProvider webhookProvider() {
 		URI url = URI.create("http://localhost:" + server.getAddress().getPort() + "/pay");
 		return new HttpPaymentProvider(new HttpPaymentProviderProperties(url, null, Duration.ofSeconds(2),
-				Duration.ofSeconds(5), WEBHOOK_SECRET, null));
+				Duration.ofSeconds(5), WEBHOOK_SECRET, null, null));
 	}
 
 	private static byte[] webhookBody(String template) {
@@ -430,7 +559,7 @@ class HttpPaymentProviderTests {
 	private HttpPaymentProvider provider(String apiKey, Duration readTimeout) {
 		URI url = URI.create("http://localhost:" + server.getAddress().getPort() + "/pay");
 		return new HttpPaymentProvider(
-				new HttpPaymentProviderProperties(url, apiKey, Duration.ofSeconds(2), readTimeout, null, null));
+				new HttpPaymentProviderProperties(url, apiKey, Duration.ofSeconds(2), readTimeout, null, null, null));
 	}
 
 }

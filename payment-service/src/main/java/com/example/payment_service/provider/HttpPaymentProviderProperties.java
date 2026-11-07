@@ -15,13 +15,16 @@ import org.springframework.validation.annotation.Validated;
 @ConfigurationProperties("payment.provider.http")
 public record HttpPaymentProviderProperties(URI url, String apiKey,
 		@DefaultValue("2s") @NotNull Duration connectTimeout, @DefaultValue("10s") @NotNull Duration readTimeout,
-		String webhookSecret, URI statusUrl) {
+		String webhookSecret, URI statusUrl, URI refundUrl) {
 
 	static final int MIN_WEBHOOK_SECRET_LENGTH = 16;
 
 	public HttpPaymentProviderProperties {
 		if (statusUrl != null && statusUrl.toString().isBlank()) {
 			statusUrl = null;
+		}
+		if (refundUrl != null && refundUrl.toString().isBlank()) {
+			refundUrl = null;
 		}
 	}
 
@@ -41,7 +44,7 @@ public record HttpPaymentProviderProperties(URI url, String apiKey,
 	public String toString() {
 		return "HttpPaymentProviderProperties[url=" + url + ", apiKey=" + mask(apiKey) + ", connectTimeout="
 				+ connectTimeout + ", readTimeout=" + readTimeout + ", webhookSecret=" + mask(webhookSecret)
-				+ ", statusUrl=" + statusUrl + "]";
+				+ ", statusUrl=" + statusUrl + ", refundUrl=" + refundUrl + "]";
 	}
 
 	private static String mask(String secret) {

@@ -34,6 +34,7 @@ import com.example.payment_service.error.RefundExceedsRemainingException;
 import com.example.payment_service.error.RefundNotSupportedException;
 import com.example.payment_service.provider.PaymentProviderRegistry;
 import com.example.payment_service.provider.ProviderResult;
+import com.example.payment_service.provider.ProviderWebhook;
 import com.example.payment_service.provider.RefundRequest;
 import com.example.payment_service.provider.RefundingProvider;
 import com.example.payment_service.reconciliation.ReconciliationProperties;
@@ -371,6 +372,92 @@ class RefundServiceTests {
 		assertThatExceptionOfType(com.example.payment_service.error.RefundNotFoundException.class)
 			.isThrownBy(() -> refundService.get(merchant, PAYMENT_ID, otherRefund))
 			.withMessage("Refund " + otherRefund + " not found");
+	}
+
+	@Test
+	void webhookSettlesThePendingRefundFoundByReference() {
+		Refund pending = pendingRefund("acme_r_1");
+		given(refundRepository.findLockedByProviderAndProviderReference("simulated", "acme_r_1"))
+			.willReturn(Optional.of(pending));
+
+		refundService.settleFromWebhook("simulated",
+				ProviderWebhook.refund(null, ProviderResult.declined("Card account closed", "acme_r_1")));
+
+		assertThat(pending.getStatus()).isEqualTo(RefundStatus.DECLINED);
+		assertThat(pending.getDeclineReason()).isEqualTo("Card account closed");
+		assertThat(pending.getProcessedAt()).isNotNull();
+		assertThat(pending.getNextCheckAt()).isNull();
+	}
+
+	@Test
+	void webhookFindsARefundWithoutReferenceByItsIdAndStoresTheReference() {
+		Refund pending = pendingRefund(null);
+		given(refundRepository.findLockedById(REFUND_ID)).willReturn(Optional.of(pending));
+
+		refundService.settleFromWebhook("simulated", ProviderWebhook.refund(REFUND_ID, ProviderResult.approved("acme_r_9")));
+
+		assertThat(pending.getStatus()).isEqualTo(RefundStatus.SUCCEEDED);
+		assertThat(pending.getProviderReference()).isEqualTo("acme_r_9");
+	}
+
+	@Test
+	void webhookDoesNotMatchAnUnreferencedRefundOfAnotherProviderById() {
+		Refund ofSimulated = pendingRefund(null);
+		given(refundRepository.findLockedById(REFUND_ID)).willReturn(Optional.of(ofSimulated));
+
+		assertThatExceptionOfType(com.example.payment_service.error.WebhookRefundNotFoundException.class)
+			.isThrownBy(() -> refundService.settleFromWebhook("http",
+					ProviderWebhook.refund(REFUND_ID, ProviderResult.approved("acme_r_9"))))
+			.withMessage("No refund of provider http matches reference acme_r_9");
+		assertThat(ofSimulated.getStatus()).isEqualTo(RefundStatus.PENDING);
+		assertThat(ofSimulated.getProviderReference()).isNull();
+	}
+
+	@Test
+	void webhookDoesNotMatchARefundByIdOnceItHasAnotherReference() {
+		Refund referenced = pendingRefund("acme_r_other");
+		given(refundRepository.findLockedById(REFUND_ID)).willReturn(Optional.of(referenced));
+
+		assertThatExceptionOfType(com.example.payment_service.error.WebhookRefundNotFoundException.class)
+			.isThrownBy(() -> refundService.settleFromWebhook("simulated",
+					ProviderWebhook.refund(REFUND_ID, ProviderResult.approved("acme_r_9"))));
+		assertThat(referenced.getStatus()).isEqualTo(RefundStatus.PENDING);
+	}
+
+	@Test
+	void webhookForAFinalRefundChangesNothing(CapturedOutput output) {
+		Refund settled = pendingRefund("acme_r_1");
+		settled.setStatus(RefundStatus.SUCCEEDED);
+		given(refundRepository.findLockedByProviderAndProviderReference("simulated", "acme_r_1"))
+			.willReturn(Optional.of(settled));
+
+		refundService.settleFromWebhook("simulated", ProviderWebhook.refund(null, ProviderResult.approved("acme_r_1")));
+		refundService.settleFromWebhook("simulated",
+				ProviderWebhook.refund(null, ProviderResult.declined("Late", "acme_r_1")));
+
+		assertThat(settled.getStatus()).isEqualTo(RefundStatus.SUCCEEDED);
+		assertThat(settled.getDeclineReason()).isNull();
+		assertThat(output).containsOnlyOnce("reports Declined but the refund is already SUCCEEDED; ignored");
+	}
+
+	@Test
+	void statusCheckSettlesAPendingRefundAndReportsItsStatus() {
+		Refund pending = pendingRefund("acme_r_1");
+		given(refundRepository.findLockedById(REFUND_ID)).willReturn(Optional.of(pending));
+
+		assertThat(refundService.settleFromStatusCheck(REFUND_ID, ProviderResult.pending("acme_r_1")))
+			.isEqualTo(RefundStatus.PENDING);
+		assertThat(refundService.settleFromStatusCheck(REFUND_ID, ProviderResult.approved("acme_r_1")))
+			.isEqualTo(RefundStatus.SUCCEEDED);
+	}
+
+	private Refund pendingRefund(String reference) {
+		Refund refund = existingRefund(null);
+		refund.setStatus(RefundStatus.PENDING);
+		refund.setIdempotencyKey(null);
+		refund.setProviderReference(reference);
+		refund.setNextCheckAt(java.time.Instant.now());
+		return refund;
 	}
 
 	private Refund existingRefund(String requestHash) {

@@ -22,14 +22,20 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import com.example.payment_service.entity.PaymentMethod;
+import com.example.payment_service.entity.Refund;
+import com.example.payment_service.entity.RefundStatus;
 import com.example.payment_service.entity.Transaction;
 import com.example.payment_service.entity.TransactionStatus;
 import com.example.payment_service.provider.PaymentProviderRegistry;
 import com.example.payment_service.provider.ProviderResult;
 import com.example.payment_service.provider.ProviderStatusRequest;
+import com.example.payment_service.provider.RefundStatusCheckingProvider;
+import com.example.payment_service.provider.RefundStatusRequest;
 import com.example.payment_service.provider.StatusCheckingProvider;
+import com.example.payment_service.repository.RefundRepository;
 import com.example.payment_service.repository.TransactionRepository;
 import com.example.payment_service.service.PaymentService;
+import com.example.payment_service.service.RefundService;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -59,9 +65,16 @@ class PendingPaymentReconcilerTests {
 
 	private final StatusCheckingProvider provider = mock();
 
+	private final RefundRepository refundRepository = mock();
+
+	private final RefundService refundService = mock();
+
+	private final RefundStatusCheckingProvider refundProvider = mock();
+
 	private final PendingPaymentReconciler reconciler = new PendingPaymentReconciler(transactionRepository,
 			providerRegistry, paymentService, new TransactionTemplate(transactionManager),
-			new ReconciliationProperties(true, INTERVAL, Duration.ofMinutes(2), 50, MAX_BACKOFF, Duration.ofHours(24)));
+			new ReconciliationProperties(true, INTERVAL, Duration.ofMinutes(2), 50, MAX_BACKOFF, Duration.ofHours(24)),
+			refundRepository, refundService);
 
 	@ParameterizedTest
 	@CsvSource({ "0, 1", "1, 2", "2, 4", "3, 8", "4, 16", "5, 32", "6, 60", "7, 60", "40, 60", "2147483647, 60",
@@ -180,6 +193,71 @@ class PendingPaymentReconcilerTests {
 
 		assertThat(output).contains("Pending payment reconciliation failed; it runs again in PT1M")
 			.contains("database down");
+	}
+
+	@Test
+	void withoutRefundStatusQueriesNoRefundIsClaimed() {
+		given(providerRegistry.statusCheckingProviders()).willReturn(Map.of());
+		given(providerRegistry.refundStatusCheckingProviders()).willReturn(Map.of());
+
+		reconciler.reconcileDuePayments();
+
+		verifyNoInteractions(refundRepository, refundService);
+	}
+
+	@Test
+	void pendingRefundsAreClaimedWithBackoffThenCheckedThenSettled() {
+		Transaction payment = pending(0, "pay-ref", Instant.now());
+		Refund refund = new Refund();
+		refund.setId(UUID.randomUUID());
+		refund.setTransaction(payment);
+		refund.setAmount(new BigDecimal("5.00"));
+		refund.setStatus(RefundStatus.PENDING);
+		refund.setProviderReference("ref-r");
+		refund.setCreatedAt(Instant.now());
+		refund.setCheckAttempts(1);
+		given(providerRegistry.statusCheckingProviders()).willReturn(Map.of());
+		given(providerRegistry.refundStatusCheckingProviders()).willReturn(Map.of("stub", refundProvider));
+		given(refundRepository.findDueForStatusCheck(any(), eq(Set.of("stub")), eq(50))).willReturn(List.of(refund));
+		given(refundProvider.checkRefundStatus(any())).willReturn(ProviderResult.approved("ref-r"));
+		given(refundService.settleFromStatusCheck(refund.getId(), ProviderResult.approved("ref-r")))
+			.willReturn(RefundStatus.SUCCEEDED);
+		Instant before = Instant.now().truncatedTo(ChronoUnit.MICROS);
+
+		assertThat(reconciler.reconcileDuePayments()).isEqualTo(1);
+
+		assertThat(refund.getCheckAttempts()).isEqualTo(2);
+		assertThat(refund.getNextCheckAt()).isBetween(before.plus(Duration.ofMinutes(2)),
+				Instant.now().plus(Duration.ofMinutes(2)));
+		InOrder order = inOrder(transactionManager, refundRepository, refundProvider, refundService);
+		order.verify(transactionManager).getTransaction(any());
+		order.verify(refundRepository).findDueForStatusCheck(any(), any(), eq(50));
+		order.verify(transactionManager).commit(any());
+		order.verify(refundProvider)
+			.checkRefundStatus(new RefundStatusRequest(refund.getId(), payment.getId(), "ref-r"));
+		order.verify(refundService).settleFromStatusCheck(refund.getId(), ProviderResult.approved("ref-r"));
+	}
+
+	@Test
+	void anOldRefundThatStaysPendingIsLoggedAtError(CapturedOutput output) {
+		Transaction payment = pending(0, "pay-ref", Instant.now());
+		Refund refund = new Refund();
+		refund.setId(UUID.randomUUID());
+		refund.setTransaction(payment);
+		refund.setAmount(new BigDecimal("5.00"));
+		refund.setStatus(RefundStatus.PENDING);
+		refund.setCreatedAt(Instant.now().minus(Duration.ofHours(25)));
+		given(providerRegistry.statusCheckingProviders()).willReturn(Map.of());
+		given(providerRegistry.refundStatusCheckingProviders()).willReturn(Map.of("stub", refundProvider));
+		given(refundRepository.findDueForStatusCheck(any(), any(), eq(50))).willReturn(List.of(refund));
+		given(refundProvider.checkRefundStatus(any())).willThrow(new IllegalStateException("down"));
+
+		reconciler.reconcileDuePayments();
+
+		assertThat(output).contains("Refund " + refund.getId() + " of payment " + payment.getId()
+				+ " with provider stub is still PENDING PT25H after it was created (check 1)")
+			.contains("Checked 1 pending refunds with their providers: 0 settled, 0 still pending, 1 failed");
+		verify(refundService, never()).settleFromStatusCheck(any(), any());
 	}
 
 	private static Transaction pending(int attempts, String reference, Instant createdAt) {

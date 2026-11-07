@@ -86,6 +86,7 @@ class ReconciliationIntegrationTests {
 
 	@BeforeEach
 	void startEmpty() {
+		jdbcTemplate.update("DELETE FROM refunds");
 		jdbcTemplate.update("DELETE FROM transactions");
 		stub.reset();
 	}
@@ -264,6 +265,73 @@ class ReconciliationIntegrationTests {
 		otherInstance.get(10, TimeUnit.SECONDS);
 		assertThat(reconciler.reconcileDuePayments()).isEqualTo(1);
 		assertThat(stub.calls(locked)).isEqualTo(1);
+	}
+
+	@Test
+	void aDuePendingRefundIsSettledOnTheNextRun() {
+		UUID payment = UUID.randomUUID();
+		jdbcTemplate.update("""
+				INSERT INTO transactions (id, merchant_id, amount, currency, payment_method, status, provider)
+				VALUES (?, ?, 49.90, 'EUR', 'CARD', 'SUCCEEDED', ?)
+				""", payment, DEMO_MERCHANT_ID, STUB);
+		UUID refund = UUID.randomUUID();
+		jdbcTemplate.update("""
+				INSERT INTO refunds (id, transaction_id, merchant_id, amount, status, provider_reference, next_check_at)
+				VALUES (?, ?, ?, 10.00, 'PENDING', 'ref-r', now() - interval '1 second')
+				""", refund, payment, DEMO_MERCHANT_ID);
+		UUID notDue = UUID.randomUUID();
+		jdbcTemplate.update("""
+				INSERT INTO refunds (id, transaction_id, merchant_id, amount, status, provider_reference, next_check_at)
+				VALUES (?, ?, ?, 5.00, 'PENDING', 'ref-later', now() + interval '10 minutes')
+				""", notDue, payment, DEMO_MERCHANT_ID);
+
+		assertThat(reconciler.reconcileDuePayments()).isEqualTo(1);
+
+		assertThat(jdbcTemplate.queryForMap("SELECT status, next_check_at, check_attempts FROM refunds WHERE id = ?", refund))
+			.containsEntry("status", "SUCCEEDED")
+			.containsEntry("next_check_at", null)
+			.containsEntry("check_attempts", 1);
+		assertThat(stub.calls(refund)).isEqualTo(1);
+		assertThat(stub.calls(notDue)).isZero();
+		assertThat(reconciler.reconcileDuePayments()).isZero();
+	}
+
+	@Test
+	void concurrentRunsNeverCheckOneRefundTwice() throws Exception {
+		UUID payment = UUID.randomUUID();
+		jdbcTemplate.update("""
+				INSERT INTO transactions (id, merchant_id, amount, currency, payment_method, status, provider)
+				VALUES (?, ?, 100.00, 'EUR', 'CARD', 'SUCCEEDED', ?)
+				""", payment, DEMO_MERCHANT_ID, STUB);
+		for (int i = 0; i < 20; i++) {
+			jdbcTemplate.update("""
+					INSERT INTO refunds (id, transaction_id, merchant_id, amount, status, provider_reference, next_check_at)
+					VALUES (?, ?, ?, 1.00, 'PENDING', ?, now() - interval '1 minute')
+					""", UUID.randomUUID(), payment, DEMO_MERCHANT_ID, "ref-r" + i);
+		}
+		stub.refundDelay(Duration.ofMillis(20));
+		CyclicBarrier start = new CyclicBarrier(2);
+
+		List<Future<Integer>> runs = new ArrayList<>();
+		for (int instance = 0; instance < 2; instance++) {
+			runs.add(executor.submit(() -> {
+				start.await(10, TimeUnit.SECONDS);
+				int claimed = 0;
+				Instant deadline = Instant.now().plusSeconds(20);
+				while (pendingRefunds() > 0 && Instant.now().isBefore(deadline)) {
+					claimed += reconciler.reconcileDuePayments();
+					sleep(Duration.ofMillis(5));
+				}
+				return claimed;
+			}));
+		}
+
+		assertThat(runs.get(0).get(30, TimeUnit.SECONDS) + runs.get(1).get(30, TimeUnit.SECONDS)).isEqualTo(20);
+		assertThat(stub.allCalls()).hasSize(20).allSatisfy((id, calls) -> assertThat(calls.get()).isEqualTo(1));
+	}
+
+	private int pendingRefunds() {
+		return jdbcTemplate.queryForObject("SELECT count(*) FROM refunds WHERE status = 'PENDING'", Integer.class);
 	}
 
 	@Test

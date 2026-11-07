@@ -58,6 +58,16 @@ public class PaymentProviderRegistry {
 		return checking;
 	}
 
+	public Map<String, RefundStatusCheckingProvider> refundStatusCheckingProviders() {
+		Map<String, RefundStatusCheckingProvider> checking = new TreeMap<>();
+		providers.forEach((name, provider) -> {
+			if (provider instanceof RefundStatusCheckingProvider statusChecking && statusChecking.checksStatus()) {
+				checking.put(name, statusChecking);
+			}
+		});
+		return checking;
+	}
+
 	public Set<String> names() {
 		return providers.keySet();
 	}

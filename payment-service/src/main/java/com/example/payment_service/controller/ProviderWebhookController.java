@@ -24,6 +24,7 @@ import com.example.payment_service.provider.PaymentProviderRegistry;
 import com.example.payment_service.provider.ProviderWebhook;
 import com.example.payment_service.provider.WebhookProvider;
 import com.example.payment_service.service.PaymentService;
+import com.example.payment_service.service.RefundService;
 
 @RestController
 @RequestMapping("/api/v1/providers")
@@ -36,9 +37,13 @@ public class ProviderWebhookController {
 
 	private final PaymentService paymentService;
 
-	public ProviderWebhookController(PaymentProviderRegistry providerRegistry, PaymentService paymentService) {
+	private final RefundService refundService;
+
+	public ProviderWebhookController(PaymentProviderRegistry providerRegistry, PaymentService paymentService,
+			RefundService refundService) {
 		this.providerRegistry = providerRegistry;
 		this.paymentService = paymentService;
+		this.refundService = refundService;
 	}
 
 	@PostMapping(path = "/{name}/webhook", consumes = MediaType.APPLICATION_JSON_VALUE)
@@ -47,7 +52,9 @@ public class ProviderWebhookController {
 			description = "Called by a payment provider, not by merchants; authenticated by the signature instead of "
 					+ "an API key. The payment is found by the provider's reference (or by paymentId while it has no "
 					+ "reference yet) and moves from PENDING to SUCCEEDED or DECLINED once; the receipt is sent then. "
-					+ "A webhook for a payment that is already final changes nothing and still returns 204.")
+					+ "A webhook for a payment that is already final changes nothing and still returns 204. "
+					+ "Refund results use the same endpoint and signature with \"type\": \"refund\": the refund "
+					+ "is found by the provider's reference (or by refundId while it has no reference yet).")
 	@ApiResponse(responseCode = "204", description = "Webhook accepted (applied, or already applied)")
 	@ApiResponse(responseCode = "400", description = "Body is not a valid webhook",
 			content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
@@ -56,19 +63,26 @@ public class ProviderWebhookController {
 					examples = @ExampleObject(value = """
 							{"timestamp": "2026-01-15T10:30:00Z", "status": 401, "error": "INVALID_WEBHOOK_SIGNATURE",
 							 "message": "Missing or invalid webhook signature", "path": "/api/v1/providers/http/webhook"}""")))
-	@ApiResponse(responseCode = "404", description = "Provider doesn't accept webhooks, or no payment matches yet "
-			+ "(the provider should retry)", content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
+	@ApiResponse(responseCode = "404", description = "Provider doesn't accept webhooks, or no payment or refund "
+			+ "matches yet (the provider should retry)", content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
 	public ResponseEntity<Void> receive(@PathVariable String name,
 			@Parameter(description = "sha256=<hex HMAC-SHA256 of the raw body with the provider's webhook secret>")
 			@RequestHeader(name = SIGNATURE_HEADER, required = false) String signature,
 			@io.swagger.v3.oas.annotations.parameters.RequestBody(
-					content = @Content(examples = @ExampleObject(value = """
-							{"paymentId": "7f8e2a1c-4b3d-4e5f-9a6b-1c2d3e4f5a6b", "status": "APPROVED",
-							 "reference": "acme_123"}"""))) @RequestBody byte[] body) {
+					content = @Content(examples = {
+							@ExampleObject(name = "payment", value = """
+									{"paymentId": "7f8e2a1c-4b3d-4e5f-9a6b-1c2d3e4f5a6b", "status": "APPROVED",
+									 "reference": "acme_123"}"""),
+							@ExampleObject(name = "refund", value = """
+									{"type": "refund", "refundId": "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+									 "status": "APPROVED", "reference": "acme_r_7"}""") })) @RequestBody byte[] body) {
 		WebhookProvider provider = providerRegistry.findWebhookProvider(name)
 			.orElseThrow(() -> new WebhookNotAcceptedException(name));
 		ProviderWebhook webhook = provider.readWebhook(body, signature);
-		paymentService.settleFromWebhook(name, webhook);
+		switch (webhook.type()) {
+			case PAYMENT -> paymentService.settleFromWebhook(name, webhook);
+			case REFUND -> refundService.settleFromWebhook(name, webhook);
+		}
 		return ResponseEntity.noContent().build();
 	}
 

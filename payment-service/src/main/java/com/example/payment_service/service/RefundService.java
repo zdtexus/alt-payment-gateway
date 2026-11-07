@@ -29,6 +29,8 @@ import com.example.payment_service.error.PaymentNotRefundableException;
 import com.example.payment_service.error.RefundExceedsRemainingException;
 import com.example.payment_service.error.RefundNotFoundException;
 import com.example.payment_service.error.RefundNotSupportedException;
+import com.example.payment_service.error.WebhookRefundNotFoundException;
+import com.example.payment_service.provider.ProviderWebhook;
 import com.example.payment_service.provider.PaymentProviderRegistry;
 import com.example.payment_service.provider.ProviderResult;
 import com.example.payment_service.provider.RefundRequest;
@@ -146,6 +148,43 @@ public class RefundService {
 			return new RefundOutcome(RefundResponse.from(refund, pending.paymentId(), pending.currency()), false);
 		}
 		return transactionTemplate.execute((status) -> applyResult(refund.getId(), result));
+	}
+
+	public RefundStatus settleFromStatusCheck(UUID refundId, ProviderResult result) {
+		return transactionTemplate.execute((status) -> applyResult(refundId, result)).refund().status();
+	}
+
+	public void settleFromWebhook(String provider, ProviderWebhook webhook) {
+		transactionTemplate.executeWithoutResult((status) -> {
+			String reference = webhook.result().reference();
+			Refund refund = refundRepository.findLockedByProviderAndProviderReference(provider, reference)
+				.or(() -> findUnreferencedRefund(provider, webhook.refundId()))
+				.orElseThrow(() -> new WebhookRefundNotFoundException(provider, reference));
+			if (refund.getStatus() == RefundStatus.PENDING) {
+				settle(refund, webhook.result());
+			}
+			else if (!matches(refund.getStatus(), webhook.result())) {
+				log.warn("Refund webhook from {} for refund {} reports {} but the refund is already {}; ignored",
+						provider, refund.getId(), webhook.result().getClass().getSimpleName(), refund.getStatus());
+			}
+		});
+	}
+
+	private Optional<Refund> findUnreferencedRefund(String provider, UUID refundId) {
+		if (refundId == null) {
+			return Optional.empty();
+		}
+		return refundRepository.findLockedById(refundId)
+			.filter((refund) -> provider.equals(refund.getTransaction().getProvider())
+					&& refund.getProviderReference() == null);
+	}
+
+	private static boolean matches(RefundStatus status, ProviderResult result) {
+		return switch (result) {
+			case ProviderResult.Approved approved -> status == RefundStatus.SUCCEEDED;
+			case ProviderResult.Declined declined -> status == RefundStatus.DECLINED;
+			case ProviderResult.Pending pending -> true;
+		};
 	}
 
 	private RefundOutcome applyResult(UUID refundId, ProviderResult result) {

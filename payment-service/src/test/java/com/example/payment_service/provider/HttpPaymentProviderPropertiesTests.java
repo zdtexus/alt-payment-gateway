@@ -71,11 +71,12 @@ class HttpPaymentProviderPropertiesTests {
 	void toStringMasksApiKeyAndWebhookSecret() {
 		HttpPaymentProviderProperties properties = new HttpPaymentProviderProperties(
 				URI.create("https://pay.example.com/charge"), "provider-api-key", Duration.ofSeconds(2),
-				Duration.ofSeconds(10), "webhook-secret-123456", URI.create("https://pay.example.com/status"));
+				Duration.ofSeconds(10), "webhook-secret-123456", URI.create("https://pay.example.com/status"),
+				URI.create("https://pay.example.com/refund"));
 
 		assertThat(properties).hasToString("HttpPaymentProviderProperties[url=https://pay.example.com/charge, "
 				+ "apiKey=***, connectTimeout=PT2S, readTimeout=PT10S, webhookSecret=***, "
-				+ "statusUrl=https://pay.example.com/status]");
+				+ "statusUrl=https://pay.example.com/status, refundUrl=https://pay.example.com/refund]");
 		assertThat(properties.toString()).doesNotContain("provider-api-key").doesNotContain("webhook-secret-123456");
 	}
 
@@ -83,10 +84,28 @@ class HttpPaymentProviderPropertiesTests {
 	void toStringShowsMissingSecretsAsNull() {
 		HttpPaymentProviderProperties properties = new HttpPaymentProviderProperties(
 				URI.create("https://pay.example.com/charge"), "", Duration.ofSeconds(2), Duration.ofSeconds(10),
-				null, null);
+				null, null, null);
 
 		assertThat(properties).hasToString("HttpPaymentProviderProperties[url=https://pay.example.com/charge, "
-				+ "apiKey=null, connectTimeout=PT2S, readTimeout=PT10S, webhookSecret=null, statusUrl=null]");
+				+ "apiKey=null, connectTimeout=PT2S, readTimeout=PT10S, webhookSecret=null, statusUrl=null, refundUrl=null]");
+	}
+
+	@Test
+	void refundUrlIsSetThroughItsEnvironmentVariable() {
+		contextRunner.withInitializer(new ConfigDataApplicationContextInitializer())
+			.withInitializer((context) -> context.getEnvironment()
+				.getPropertySources()
+				.addFirst(new SystemEnvironmentPropertySource("test-systemEnvironment",
+						Map.of("PAYMENT_PROVIDER_HTTP_URL", "https://pay.example.com/charge",
+								"PAYMENT_PROVIDER_HTTP_REFUND_URL", "https://pay.example.com/refund"))))
+			.run((context) -> {
+				assertThat(context.getBean(HttpPaymentProviderProperties.class).refundUrl())
+					.isEqualTo(URI.create("https://pay.example.com/refund"));
+				assertThat(context.getBean(HttpPaymentProvider.class).supportsRefunds()).isTrue();
+			});
+		contextRunner.withInitializer(new ConfigDataApplicationContextInitializer())
+			.withPropertyValues("payment.provider.http.url=https://pay.example.com/charge")
+			.run((context) -> assertThat(context.getBean(HttpPaymentProvider.class).supportsRefunds()).isFalse());
 	}
 
 	@Test

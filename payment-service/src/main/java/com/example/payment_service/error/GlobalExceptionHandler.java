@@ -94,6 +94,12 @@ public class GlobalExceptionHandler {
 		return error(HttpStatus.UNPROCESSABLE_CONTENT, "PAYMENT_RULE_VIOLATION", ex.getMessage(), request);
 	}
 
+	@ExceptionHandler(WebhookRefundNotFoundException.class)
+	ResponseEntity<ErrorResponse> handleWebhookRefundNotFound(WebhookRefundNotFoundException ex,
+			HttpServletRequest request) {
+		return error(HttpStatus.NOT_FOUND, "REFUND_NOT_FOUND", ex.getMessage(), request);
+	}
+
 	@ExceptionHandler(RefundNotFoundException.class)
 	ResponseEntity<ErrorResponse> handleRefundNotFound(RefundNotFoundException ex, HttpServletRequest request) {
 		return error(HttpStatus.NOT_FOUND, "REFUND_NOT_FOUND", ex.getMessage(), request);

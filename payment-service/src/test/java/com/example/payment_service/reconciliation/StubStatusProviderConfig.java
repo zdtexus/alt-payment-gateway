@@ -14,7 +14,8 @@ import com.example.payment_service.provider.PaymentProvider;
 import com.example.payment_service.provider.ProviderRequest;
 import com.example.payment_service.provider.ProviderResult;
 import com.example.payment_service.provider.ProviderStatusRequest;
-import com.example.payment_service.provider.StatusCheckingProvider;
+import com.example.payment_service.provider.RefundStatusCheckingProvider;
+import com.example.payment_service.provider.RefundStatusRequest;
 
 @TestConfiguration(proxyBeanMethods = false)
 class StubStatusProviderConfig {
@@ -24,7 +25,7 @@ class StubStatusProviderConfig {
 		return new StubStatusProvider();
 	}
 
-	static class StubStatusProvider implements PaymentProvider, StatusCheckingProvider {
+	static class StubStatusProvider implements PaymentProvider, RefundStatusCheckingProvider {
 
 		static final String NAME = "stub-status";
 
@@ -35,6 +36,8 @@ class StubStatusProviderConfig {
 
 		private volatile Consumer<ProviderStatusRequest> beforeAnswer = (request) -> {
 		};
+
+		private volatile java.time.Duration refundDelay = java.time.Duration.ZERO;
 
 		@Override
 		public String name() {
@@ -56,6 +59,22 @@ class StubStatusProviderConfig {
 			calls.computeIfAbsent(request.paymentId(), (id) -> new AtomicInteger()).incrementAndGet();
 			beforeAnswer.accept(request);
 			return answer.apply(request);
+		}
+
+		@Override
+		public ProviderResult checkRefundStatus(RefundStatusRequest request) {
+			calls.computeIfAbsent(request.refundId(), (id) -> new AtomicInteger()).incrementAndGet();
+			try {
+				Thread.sleep(refundDelay);
+			}
+			catch (InterruptedException ex) {
+				Thread.currentThread().interrupt();
+			}
+			return ProviderResult.approved(request.providerReference());
+		}
+
+		void refundDelay(java.time.Duration delay) {
+			this.refundDelay = delay;
 		}
 
 		void answer(Function<ProviderStatusRequest, ProviderResult> answer) {
@@ -80,6 +99,7 @@ class StubStatusProviderConfig {
 			answer = (request) -> ProviderResult.approved(request.providerReference());
 			beforeAnswer = (request) -> {
 			};
+			refundDelay = java.time.Duration.ZERO;
 		}
 
 	}

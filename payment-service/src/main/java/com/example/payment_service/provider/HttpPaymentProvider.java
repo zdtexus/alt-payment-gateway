@@ -6,6 +6,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
 
@@ -30,7 +31,8 @@ import com.example.payment_service.error.InvalidWebhookSignatureException;
 
 @Component
 @ConditionalOnProperty(name = "payment.provider.http.url")
-public class HttpPaymentProvider implements PaymentProvider, WebhookProvider, StatusCheckingProvider {
+public class HttpPaymentProvider
+		implements PaymentProvider, WebhookProvider, RefundStatusCheckingProvider, RefundingProvider {
 
 	public static final String NAME = "http";
 
@@ -44,6 +46,8 @@ public class HttpPaymentProvider implements PaymentProvider, WebhookProvider, St
 
 	private final URI statusUrl;
 
+	private final URI refundUrl;
+
 	public HttpPaymentProvider(HttpPaymentProviderProperties properties) {
 		JdkClientHttpRequestFactory requestFactory = new JdkClientHttpRequestFactory(httpClient(properties));
 		requestFactory.setReadTimeout(properties.readTimeout());
@@ -56,6 +60,7 @@ public class HttpPaymentProvider implements PaymentProvider, WebhookProvider, St
 		this.restClient = builder.build();
 		this.webhookSecret = StringUtils.hasText(properties.webhookSecret()) ? properties.webhookSecret() : null;
 		this.statusUrl = properties.statusUrl();
+		this.refundUrl = properties.refundUrl();
 	}
 
 	static HttpClient httpClient(HttpPaymentProviderProperties properties) {
@@ -111,6 +116,57 @@ public class HttpPaymentProvider implements PaymentProvider, WebhookProvider, St
 	}
 
 	@Override
+	public ProviderResult checkRefundStatus(RefundStatusRequest request) {
+		if (!checksStatus()) {
+			throw new IllegalStateException("Payment provider http has no status URL");
+		}
+		UriComponentsBuilder uri = UriComponentsBuilder.fromUri(statusUrl)
+			.queryParam("refundId", request.refundId())
+			.queryParam("paymentId", request.paymentId());
+		if (StringUtils.hasText(request.providerReference())) {
+			uri.queryParam("reference", request.providerReference());
+		}
+		ProviderAnswer answer = restClient.get()
+			.uri(uri.encode().build().toUri())
+			.accept(MediaType.APPLICATION_JSON)
+			.retrieve()
+			.body(ProviderAnswer.class);
+		if (answer == null) {
+			throw new IllegalStateException("Payment provider http answered the refund status query without a status");
+		}
+		return answer.toResult();
+	}
+
+	@Override
+	public boolean supportsRefunds() {
+		return refundUrl != null;
+	}
+
+	@Override
+	public ProviderResult refund(RefundRequest request) {
+		if (!supportsRefunds()) {
+			throw new IllegalStateException("Payment provider http has no refund URL");
+		}
+		Map<String, Object> body = new LinkedHashMap<>();
+		body.put("refundId", request.refundId());
+		body.put("paymentId", request.paymentId());
+		body.put("paymentReference", request.paymentReference());
+		body.put("currency", request.currency());
+		body.put("amount", request.amount());
+		ProviderAnswer answer = restClient.post()
+			.uri(refundUrl)
+			.contentType(MediaType.APPLICATION_JSON)
+			.header("Idempotency-Key", request.refundId().toString())
+			.body(body)
+			.retrieve()
+			.body(ProviderAnswer.class);
+		if (answer == null) {
+			throw new IllegalStateException("Payment provider http answered the refund without a status");
+		}
+		return answer.toResult();
+	}
+
+	@Override
 	public boolean acceptsWebhooks() {
 		return webhookSecret != null;
 	}
@@ -135,8 +191,15 @@ public class HttpPaymentProvider implements PaymentProvider, WebhookProvider, St
 			throw new InvalidWebhookException("Webhook body is empty");
 		}
 		try {
-			return new ProviderWebhook(webhook.paymentId(),
-					new ProviderAnswer(webhook.status(), webhook.reference(), webhook.reason()).toResult());
+			ProviderResult result = new ProviderAnswer(webhook.status(), webhook.reference(), webhook.reason())
+				.toResult();
+			if (webhook.type() == null || "payment".equals(webhook.type())) {
+				return new ProviderWebhook(webhook.paymentId(), result);
+			}
+			if ("refund".equals(webhook.type())) {
+				return ProviderWebhook.refund(webhook.refundId(), result);
+			}
+			throw new InvalidWebhookException("Unknown webhook type '" + webhook.type() + "'", null);
 		}
 		catch (IllegalArgumentException | IllegalStateException ex) {
 			throw new InvalidWebhookException(ex.getMessage(), ex);
@@ -171,7 +234,7 @@ public class HttpPaymentProvider implements PaymentProvider, WebhookProvider, St
 
 	}
 
-	record WebhookBody(UUID paymentId, String status, String reference, String reason) {
+	record WebhookBody(String type, UUID paymentId, UUID refundId, String status, String reference, String reason) {
 	}
 
 }

@@ -72,6 +72,38 @@ class PaymentProviderRegistryTests {
 		assertThat(registry.findRefundingProvider("unknown")).isEmpty();
 	}
 
+	@Test
+	void listsOnlyProvidersThatCanCheckRefundStatusNow() {
+		RefundStatusProvider checking = new RefundStatusProvider("refund-checking", true);
+		RefundStatusProvider switchedOff = new RefundStatusProvider("refund-switched-off", false);
+
+		PaymentProviderRegistry registry = new PaymentProviderRegistry(
+				List.of(new StatusProvider("payments-only", true), switchedOff, checking));
+
+		assertThat(registry.refundStatusCheckingProviders()).containsOnlyKeys("refund-checking");
+		assertThat(registry.statusCheckingProviders()).containsOnlyKeys("payments-only", "refund-checking");
+	}
+
+	record RefundStatusProvider(String name, boolean checksStatus)
+			implements PaymentProvider, RefundStatusCheckingProvider {
+
+		@Override
+		public ProviderResult process(ProviderRequest request) {
+			return ProviderResult.approved();
+		}
+
+		@Override
+		public ProviderResult checkStatus(ProviderStatusRequest request) {
+			return ProviderResult.approved();
+		}
+
+		@Override
+		public ProviderResult checkRefundStatus(RefundStatusRequest request) {
+			return ProviderResult.approved();
+		}
+
+	}
+
 	record RefundProvider(String name, boolean supportsRefunds) implements PaymentProvider, RefundingProvider {
 
 		@Override

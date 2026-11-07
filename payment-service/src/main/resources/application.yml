@@ -42,6 +42,7 @@ payment:
       read-timeout: ${PAYMENT_PROVIDER_HTTP_READ_TIMEOUT:10s}
       webhook-secret: ${PAYMENT_PROVIDER_HTTP_WEBHOOK_SECRET:}
       status-url: ${PAYMENT_PROVIDER_HTTP_STATUS_URL:}
+      refund-url: ${PAYMENT_PROVIDER_HTTP_REFUND_URL:}
   reconciliation:
     enabled: ${PAYMENT_RECONCILIATION_ENABLED:true}
     interval: ${PAYMENT_RECONCILIATION_INTERVAL:1m}

@@ -13,14 +13,20 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import com.example.payment_service.entity.Refund;
+import com.example.payment_service.entity.RefundStatus;
 import com.example.payment_service.entity.Transaction;
 import com.example.payment_service.entity.TransactionStatus;
 import com.example.payment_service.provider.PaymentProviderRegistry;
 import com.example.payment_service.provider.ProviderResult;
 import com.example.payment_service.provider.ProviderStatusRequest;
+import com.example.payment_service.provider.RefundStatusCheckingProvider;
+import com.example.payment_service.provider.RefundStatusRequest;
 import com.example.payment_service.provider.StatusCheckingProvider;
+import com.example.payment_service.repository.RefundRepository;
 import com.example.payment_service.repository.TransactionRepository;
 import com.example.payment_service.service.PaymentService;
+import com.example.payment_service.service.RefundService;
 
 @Component
 public class PendingPaymentReconciler {
@@ -39,14 +45,21 @@ public class PendingPaymentReconciler {
 
 	private final ReconciliationProperties properties;
 
+	private final RefundRepository refundRepository;
+
+	private final RefundService refundService;
+
 	public PendingPaymentReconciler(TransactionRepository transactionRepository,
 			PaymentProviderRegistry providerRegistry, PaymentService paymentService,
-			TransactionTemplate transactionTemplate, ReconciliationProperties properties) {
+			TransactionTemplate transactionTemplate, ReconciliationProperties properties,
+			RefundRepository refundRepository, RefundService refundService) {
 		this.transactionRepository = transactionRepository;
 		this.providerRegistry = providerRegistry;
 		this.paymentService = paymentService;
 		this.transactionTemplate = transactionTemplate;
 		this.properties = properties;
+		this.refundRepository = refundRepository;
+		this.refundService = refundService;
 	}
 
 	public void runScheduled() {
@@ -59,6 +72,10 @@ public class PendingPaymentReconciler {
 	}
 
 	public int reconcileDuePayments() {
+		return reconcilePayments() + reconcileRefunds();
+	}
+
+	private int reconcilePayments() {
 		Map<String, StatusCheckingProvider> providers = providerRegistry.statusCheckingProviders();
 		if (providers.isEmpty()) {
 			return 0;
@@ -79,6 +96,66 @@ public class PendingPaymentReconciler {
 					claimed.size(), settled, stillPending, failed);
 		}
 		return claimed.size();
+	}
+
+	private int reconcileRefunds() {
+		Map<String, RefundStatusCheckingProvider> providers = providerRegistry.refundStatusCheckingProviders();
+		if (providers.isEmpty()) {
+			return 0;
+		}
+		List<ClaimedRefund> claimed = claimRefunds(providers);
+		int settled = 0;
+		int stillPending = 0;
+		int failed = 0;
+		for (ClaimedRefund refund : claimed) {
+			switch (checkRefund(refund, providers.get(refund.provider()))) {
+				case SETTLED -> settled++;
+				case STILL_PENDING -> stillPending++;
+				case FAILED -> failed++;
+			}
+		}
+		if (!claimed.isEmpty()) {
+			log.info("Checked {} pending refunds with their providers: {} settled, {} still pending, {} failed",
+					claimed.size(), settled, stillPending, failed);
+		}
+		return claimed.size();
+	}
+
+	private List<ClaimedRefund> claimRefunds(Map<String, RefundStatusCheckingProvider> providers) {
+		return transactionTemplate.execute((status) -> {
+			Instant now = Instant.now().truncatedTo(ChronoUnit.MICROS);
+			List<Refund> due = refundRepository.findDueForStatusCheck(now, providers.keySet(), properties.batchSize());
+			return due.stream().map((refund) -> {
+				int attempts = refund.getCheckAttempts();
+				refund.setNextCheckAt(now.plus(backoff(attempts, properties.interval(), properties.maxBackoff())));
+				refund.setCheckAttempts(attempts + 1);
+				Transaction payment = refund.getTransaction();
+				return new ClaimedRefund(refund.getId(), payment.getId(), payment.getProvider(),
+						refund.getProviderReference(), refund.getCreatedAt(), attempts + 1);
+			}).toList();
+		});
+	}
+
+	private Outcome checkRefund(ClaimedRefund refund, RefundStatusCheckingProvider provider) {
+		Outcome outcome;
+		try {
+			ProviderResult result = provider
+				.checkRefundStatus(new RefundStatusRequest(refund.id(), refund.paymentId(), refund.reference()));
+			RefundStatus status = refundService.settleFromStatusCheck(refund.id(), result);
+			outcome = (status == RefundStatus.PENDING) ? Outcome.STILL_PENDING : Outcome.SETTLED;
+		}
+		catch (RuntimeException ex) {
+			log.warn("Status check {} for refund {} of payment {} with provider {} failed; next check after backoff: {}",
+					refund.attempt(), refund.id(), refund.paymentId(), refund.provider(), ex.toString());
+			outcome = Outcome.FAILED;
+		}
+		if (outcome != Outcome.SETTLED && refund.createdAt().plus(properties.alertAfter()).isBefore(Instant.now())) {
+			log.error("Refund {} of payment {} with provider {} is still PENDING {} after it was created (check {}); "
+					+ "check it with the provider", refund.id(), refund.paymentId(), refund.provider(),
+					Duration.between(refund.createdAt(), Instant.now()).truncatedTo(ChronoUnit.MINUTES),
+					refund.attempt());
+		}
+		return outcome;
 	}
 
 	static Duration backoff(int attempts, Duration interval, Duration maxBackoff) {
@@ -133,6 +210,9 @@ public class PendingPaymentReconciler {
 	}
 
 	record ClaimedPayment(UUID id, String provider, String reference, Instant createdAt, int attempt) {
+	}
+
+	record ClaimedRefund(UUID id, UUID paymentId, String provider, String reference, Instant createdAt, int attempt) {
 	}
 
 }

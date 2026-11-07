@@ -25,6 +25,21 @@ public interface RefundRepository extends JpaRepository<Refund, UUID> {
 	@Lock(LockModeType.PESSIMISTIC_WRITE)
 	Optional<Refund> findLockedById(UUID id);
 
+	@Lock(LockModeType.PESSIMISTIC_WRITE)
+	@Query("SELECT r FROM Refund r WHERE r.transaction.provider = :provider AND r.providerReference = :reference")
+	Optional<Refund> findLockedByProviderAndProviderReference(@Param("provider") String provider,
+			@Param("reference") String reference);
+
+	@Query(value = """
+			SELECT r.* FROM refunds r JOIN transactions t ON t.id = r.transaction_id
+			WHERE r.status = 'PENDING' AND r.next_check_at <= :now AND t.provider IN (:providers)
+			ORDER BY r.next_check_at
+			LIMIT :limit
+			FOR UPDATE OF r SKIP LOCKED
+			""", nativeQuery = true)
+	List<Refund> findDueForStatusCheck(@Param("now") java.time.Instant now,
+			@Param("providers") Collection<String> providers, @Param("limit") int limit);
+
 	Optional<Refund> findByIdAndTransactionId(UUID id, UUID transactionId);
 
 	@Query("""
