@@ -123,6 +123,12 @@ public class GlobalExceptionHandler {
 		return error(HttpStatus.UNPROCESSABLE_CONTENT, "REFUND_NOT_SUPPORTED", ex.getMessage(), request);
 	}
 
+	@ExceptionHandler(ManualCaptureNotSupportedException.class)
+	ResponseEntity<ErrorResponse> handleManualCaptureNotSupported(ManualCaptureNotSupportedException ex,
+			HttpServletRequest request) {
+		return error(HttpStatus.UNPROCESSABLE_CONTENT, "MANUAL_CAPTURE_NOT_SUPPORTED", ex.getMessage(), request);
+	}
+
 	@ExceptionHandler(IdempotencyKeyReusedException.class)
 	ResponseEntity<ErrorResponse> handleIdempotencyKeyReused(IdempotencyKeyReusedException ex,
 			HttpServletRequest request) {

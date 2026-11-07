@@ -33,9 +33,11 @@ payment:
     simulated:
       success-rate: ${PAYMENT_PROVIDER_SUCCESS_RATE:0.9}
       latency: ${PAYMENT_PROVIDER_LATENCY:300ms}
+      authorization-validity: ${PAYMENT_PROVIDER_AUTHORIZATION_VALIDITY:7d}
     fixed:
       outcome: ${PAYMENT_PROVIDER_FIXED_OUTCOME:approve}
       decline-reason: ${PAYMENT_PROVIDER_FIXED_DECLINE_REASON:Declined by fixed provider}
+      authorization-validity: ${PAYMENT_PROVIDER_FIXED_AUTHORIZATION_VALIDITY:7d}
     http:
       api-key: ${PAYMENT_PROVIDER_HTTP_API_KEY:}
       connect-timeout: ${PAYMENT_PROVIDER_HTTP_CONNECT_TIMEOUT:2s}

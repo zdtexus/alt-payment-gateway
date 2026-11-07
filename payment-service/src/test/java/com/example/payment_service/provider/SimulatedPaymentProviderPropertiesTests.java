@@ -23,18 +23,21 @@ class SimulatedPaymentProviderPropertiesTests {
 			SimulatedPaymentProviderProperties properties = context.getBean(SimulatedPaymentProviderProperties.class);
 			assertThat(properties.successRate()).isEqualTo(0.9);
 			assertThat(properties.latency()).isEqualTo(Duration.ofMillis(300));
+			assertThat(properties.authorizationValidity()).isEqualTo(Duration.ofDays(7));
 		});
 	}
 
 	@Test
 	void bindsConfiguredValues() {
 		contextRunner
-			.withPropertyValues("payment.provider.simulated.success-rate=0.25", "payment.provider.simulated.latency=2s")
+			.withPropertyValues("payment.provider.simulated.success-rate=0.25", "payment.provider.simulated.latency=2s",
+					"payment.provider.simulated.authorization-validity=3d")
 			.run((context) -> {
 				SimulatedPaymentProviderProperties properties = context
 					.getBean(SimulatedPaymentProviderProperties.class);
 				assertThat(properties.successRate()).isEqualTo(0.25);
 				assertThat(properties.latency()).isEqualTo(Duration.ofSeconds(2));
+				assertThat(properties.authorizationValidity()).isEqualTo(Duration.ofDays(3));
 			});
 	}
 
@@ -43,6 +46,15 @@ class SimulatedPaymentProviderPropertiesTests {
 	void rejectsSuccessRateOutsideZeroToOne(String successRate) {
 		contextRunner.withPropertyValues("payment.provider.simulated.success-rate=" + successRate)
 			.run((context) -> assertThat(context).hasFailed());
+	}
+
+	@ParameterizedTest
+	@ValueSource(strings = { "0s", "-1h" })
+	void rejectsAnAuthorizationValidityThatIsNotPositive(String validity) {
+		contextRunner.withPropertyValues("payment.provider.simulated.authorization-validity=" + validity)
+			.run((context) -> assertThat(context).hasFailed()
+				.getFailure()
+				.hasStackTraceContaining("payment.provider.simulated.authorization-validity must be positive"));
 	}
 
 	@Configuration(proxyBeanMethods = false)

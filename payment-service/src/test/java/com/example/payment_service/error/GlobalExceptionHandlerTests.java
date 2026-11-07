@@ -37,6 +37,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.example.payment_service.auth.ApiKeyAuthFilter;
+import com.example.payment_service.entity.PaymentMethod;
 import com.example.payment_service.entity.TransactionStatus;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -168,6 +169,14 @@ class GlobalExceptionHandlerTests {
 
 		expectError(result, 422, "REFUND_NOT_SUPPORTED", "This payment can't be refunded through its payment provider",
 				"/test/refund-not-supported");
+	}
+
+	@Test
+	void manualCaptureWithoutAnAuthorizingProviderReturns422WithoutNamingTheProvider() throws Exception {
+		ResultActions result = mvc.perform(get("/test/manual-capture-not-supported"));
+
+		expectError(result, 422, "MANUAL_CAPTURE_NOT_SUPPORTED", "Manual capture is not supported for KVIK payments",
+				"/test/manual-capture-not-supported");
 	}
 
 	@Test
@@ -341,6 +350,11 @@ class GlobalExceptionHandlerTests {
 		@GetMapping("/test/refund-not-supported")
 		void refundNotSupported() {
 			throw new RefundNotSupportedException();
+		}
+
+		@GetMapping("/test/manual-capture-not-supported")
+		void manualCaptureNotSupported() {
+			throw new ManualCaptureNotSupportedException(PaymentMethod.KVIK);
 		}
 
 		@GetMapping("/test/idempotency-key-reused")

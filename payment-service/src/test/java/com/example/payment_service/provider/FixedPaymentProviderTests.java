@@ -1,6 +1,8 @@
 package com.example.payment_service.provider;
 
 import java.math.BigDecimal;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.UUID;
@@ -81,13 +83,70 @@ class FixedPaymentProviderTests {
 		assertThat(provider.supportsRefunds()).isTrue();
 	}
 
+	private static final CaptureRequest CAPTURE = new CaptureRequest(UUID.randomUUID(), "fix_a_1", "EUR",
+			new BigDecimal("6.00"));
+
+	private static final VoidRequest VOID = new VoidRequest(UUID.randomUUID(), "fix_a_1");
+
+	@Test
+	void authorizationsFollowTheConfiguredOutcome() {
+		FixedPaymentProvider approving = new FixedPaymentProvider(
+				new FixedPaymentProviderProperties(Outcome.APPROVE, "unused", Duration.ofHours(12)));
+
+		Instant before = Instant.now();
+		AuthorizationResult approved = approving.authorize(REQUEST);
+		Instant after = Instant.now();
+		AuthorizationResult declined = provider(Outcome.DECLINE, "Cards are paused").authorize(REQUEST);
+
+		assertThat(approved.result()).isInstanceOfSatisfying(ProviderResult.Approved.class,
+				(result) -> assertThat(result.reference()).matches("fix_a_[0-9a-f-]{36}"));
+		assertThat(approved.expiresAt()).isBetween(before.plus(Duration.ofHours(12)), after.plus(Duration.ofHours(12)));
+		assertThat(declined.result()).isInstanceOfSatisfying(ProviderResult.Declined.class, (result) -> {
+			assertThat(result.reason()).isEqualTo("Cards are paused");
+			assertThat(result.reference()).matches("fix_a_[0-9a-f-]{36}");
+		});
+		assertThat(declined.expiresAt()).isNull();
+	}
+
+	@Test
+	void capturesAndVoidsFollowTheConfiguredOutcome() {
+		FixedPaymentProvider approving = provider(Outcome.APPROVE, "unused");
+		FixedPaymentProvider declining = provider(Outcome.DECLINE, "Captures are paused");
+
+		assertThat(approving.capture(CAPTURE)).isInstanceOfSatisfying(ProviderResult.Approved.class,
+				(approved) -> assertThat(approved.reference()).matches("fix_c_[0-9a-f-]{36}"));
+		assertThat(approving.voidAuthorization(VOID)).isInstanceOfSatisfying(ProviderResult.Approved.class,
+				(approved) -> assertThat(approved.reference()).matches("fix_v_[0-9a-f-]{36}"));
+		assertThat(declining.capture(CAPTURE)).isInstanceOfSatisfying(ProviderResult.Declined.class, (declined) -> {
+			assertThat(declined.reason()).isEqualTo("Captures are paused");
+			assertThat(declined.reference()).matches("fix_c_[0-9a-f-]{36}");
+		});
+		assertThat(declining.voidAuthorization(VOID)).isInstanceOfSatisfying(ProviderResult.Declined.class,
+				(declined) -> assertThat(declined.reference()).matches("fix_v_[0-9a-f-]{36}"));
+	}
+
+	@Test
+	void supportsManualCaptureWithItsOwnReferences() {
+		FixedPaymentProvider provider = provider(Outcome.APPROVE, "unused");
+
+		Set<String> references = new HashSet<>();
+		for (int i = 0; i < 20; i++) {
+			references.add(provider.authorize(REQUEST).result().reference());
+			references.add(provider.capture(CAPTURE).reference());
+			references.add(provider.voidAuthorization(VOID).reference());
+		}
+
+		assertThat(references).hasSize(60);
+		assertThat(provider.supportsManualCapture()).isTrue();
+	}
+
 	@Test
 	void isNamedFixed() {
 		assertThat(provider(Outcome.APPROVE, "unused").name()).isEqualTo("fixed");
 	}
 
 	private static FixedPaymentProvider provider(Outcome outcome, String declineReason) {
-		return new FixedPaymentProvider(new FixedPaymentProviderProperties(outcome, declineReason));
+		return new FixedPaymentProvider(new FixedPaymentProviderProperties(outcome, declineReason, Duration.ofDays(7)));
 	}
 
 }

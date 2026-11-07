@@ -84,6 +84,45 @@ class PaymentProviderRegistryTests {
 		assertThat(registry.statusCheckingProviders()).containsOnlyKeys("payments-only", "refund-checking");
 	}
 
+	@Test
+	void findsOnlyProvidersThatCanAuthorizeNow() {
+		AuthorizationProvider authorizing = new AuthorizationProvider("authorizing", true);
+		AuthorizationProvider switchedOff = new AuthorizationProvider("switched-off", false);
+
+		PaymentProviderRegistry registry = new PaymentProviderRegistry(
+				List.of(new NamedProvider("plain"), switchedOff, authorizing));
+
+		assertThat(registry.findAuthorizingProvider("authorizing")).containsSame(authorizing);
+		assertThat(registry.findAuthorizingProvider("switched-off")).isEmpty();
+		assertThat(registry.findAuthorizingProvider("plain")).isEmpty();
+		assertThat(registry.findAuthorizingProvider("unknown")).isEmpty();
+	}
+
+	record AuthorizationProvider(String name, boolean supportsManualCapture)
+			implements PaymentProvider, AuthorizingProvider {
+
+		@Override
+		public ProviderResult process(ProviderRequest request) {
+			return ProviderResult.approved();
+		}
+
+		@Override
+		public AuthorizationResult authorize(ProviderRequest request) {
+			return AuthorizationResult.approved(null, java.time.Instant.now());
+		}
+
+		@Override
+		public ProviderResult capture(CaptureRequest request) {
+			return ProviderResult.approved();
+		}
+
+		@Override
+		public ProviderResult voidAuthorization(VoidRequest request) {
+			return ProviderResult.approved();
+		}
+
+	}
+
 	record RefundStatusProvider(String name, boolean checksStatus)
 			implements PaymentProvider, RefundStatusCheckingProvider {
 

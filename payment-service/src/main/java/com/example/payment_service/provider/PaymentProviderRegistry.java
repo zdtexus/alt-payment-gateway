@@ -48,6 +48,12 @@ public class PaymentProviderRegistry {
 			.filter(RefundingProvider::supportsRefunds);
 	}
 
+	public Optional<AuthorizingProvider> findAuthorizingProvider(String name) {
+		return find(name).filter(AuthorizingProvider.class::isInstance)
+			.map(AuthorizingProvider.class::cast)
+			.filter(AuthorizingProvider::supportsManualCapture);
+	}
+
 	public Map<String, StatusCheckingProvider> statusCheckingProviders() {
 		Map<String, StatusCheckingProvider> checking = new TreeMap<>();
 		providers.forEach((name, provider) -> {

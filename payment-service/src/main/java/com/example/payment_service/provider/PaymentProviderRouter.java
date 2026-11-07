@@ -13,6 +13,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
 import com.example.payment_service.entity.PaymentMethod;
+import com.example.payment_service.error.ManualCaptureNotSupportedException;
 
 @Component
 public class PaymentProviderRouter {
@@ -54,6 +55,13 @@ public class PaymentProviderRouter {
 
 	public PaymentProvider providerFor(PaymentMethod method) {
 		return providers.get(method);
+	}
+
+	public AuthorizingProvider authorizingProviderFor(PaymentMethod method) {
+		if (providers.get(method) instanceof AuthorizingProvider authorizing && authorizing.supportsManualCapture()) {
+			return authorizing;
+		}
+		throw new ManualCaptureNotSupportedException(method);
 	}
 
 	private String describe() {

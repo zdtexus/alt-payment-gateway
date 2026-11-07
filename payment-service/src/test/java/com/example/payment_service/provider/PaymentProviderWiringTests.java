@@ -47,9 +47,33 @@ class PaymentProviderWiringTests {
 		}
 
 		@Test
+		void authorizationsAreValidForSevenDaysByDefault() {
+			assertThat(simulatedProperties.authorizationValidity()).isEqualTo(Duration.ofDays(7));
+		}
+
+		@Test
 		void oldEnvironmentVariableNamesStillConfigureTheSimulatedProvider() {
 			assertThat(simulatedProperties.successRate()).isEqualTo(0.25);
 			assertThat(simulatedProperties.latency()).isEqualTo(Duration.ZERO);
+		}
+
+	}
+
+	@Nested
+	@SpringBootTest(classes = ProviderConfig.class, properties = { "PAYMENT_PROVIDER_AUTHORIZATION_VALIDITY=3d",
+			"PAYMENT_PROVIDER_FIXED_AUTHORIZATION_VALIDITY=12h" })
+	class WithAuthorizationValiditiesSetByEnvironment {
+
+		@Autowired
+		private SimulatedPaymentProviderProperties simulatedProperties;
+
+		@Autowired
+		private FixedPaymentProviderProperties fixedProperties;
+
+		@Test
+		void eachProviderGetsItsOwnValidity() {
+			assertThat(simulatedProperties.authorizationValidity()).isEqualTo(Duration.ofDays(3));
+			assertThat(fixedProperties.authorizationValidity()).isEqualTo(Duration.ofHours(12));
 		}
 
 	}
@@ -137,7 +161,8 @@ class PaymentProviderWiringTests {
 	}
 
 	@Configuration(proxyBeanMethods = false)
-	@EnableConfigurationProperties({ PaymentProviderProperties.class, SimulatedPaymentProviderProperties.class })
+	@EnableConfigurationProperties({ PaymentProviderProperties.class, SimulatedPaymentProviderProperties.class,
+			FixedPaymentProviderProperties.class })
 	@Import({ SimulatedPaymentProvider.class, PaymentProviderRegistry.class, PaymentProviderRouter.class })
 	static class ProviderConfig {
 

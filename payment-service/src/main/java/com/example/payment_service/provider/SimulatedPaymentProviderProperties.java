@@ -2,6 +2,7 @@ package com.example.payment_service.provider;
 
 import java.time.Duration;
 
+import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.DecimalMax;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotNull;
@@ -14,5 +15,12 @@ import org.springframework.validation.annotation.Validated;
 @ConfigurationProperties("payment.provider.simulated")
 public record SimulatedPaymentProviderProperties(
 		@DefaultValue("0.9") @DecimalMin("0.0") @DecimalMax("1.0") double successRate,
-		@DefaultValue("300ms") @NotNull Duration latency) {
+		@DefaultValue("300ms") @NotNull Duration latency,
+		@DefaultValue("7d") @NotNull Duration authorizationValidity) {
+
+	@AssertTrue(message = "payment.provider.simulated.authorization-validity must be positive")
+	public boolean isAuthorizationValidityPositive() {
+		return authorizationValidity != null && authorizationValidity.isPositive();
+	}
+
 }

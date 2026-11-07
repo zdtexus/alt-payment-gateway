@@ -1,5 +1,7 @@
 package com.example.payment_service.provider;
 
+import java.time.Duration;
+
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -23,6 +25,7 @@ class FixedPaymentProviderPropertiesTests {
 			FixedPaymentProviderProperties properties = context.getBean(FixedPaymentProviderProperties.class);
 			assertThat(properties.outcome()).isEqualTo(Outcome.APPROVE);
 			assertThat(properties.declineReason()).isEqualTo("Declined by fixed provider");
+			assertThat(properties.authorizationValidity()).isEqualTo(Duration.ofDays(7));
 		});
 	}
 
@@ -57,6 +60,22 @@ class FixedPaymentProviderPropertiesTests {
 			.run((context) -> assertThat(context).hasNotFailed());
 		contextRunner.withPropertyValues("payment.provider.fixed.decline-reason=" + "r".repeat(256))
 			.run((context) -> assertThat(context).hasFailed());
+	}
+
+	@Test
+	void bindsTheAuthorizationValidity() {
+		contextRunner.withPropertyValues("payment.provider.fixed.authorization-validity=12h")
+			.run((context) -> assertThat(context.getBean(FixedPaymentProviderProperties.class).authorizationValidity())
+				.isEqualTo(Duration.ofHours(12)));
+	}
+
+	@ParameterizedTest
+	@ValueSource(strings = { "0s", "-1h" })
+	void rejectsAnAuthorizationValidityThatIsNotPositive(String validity) {
+		contextRunner.withPropertyValues("payment.provider.fixed.authorization-validity=" + validity)
+			.run((context) -> assertThat(context).hasFailed()
+				.getFailure()
+				.hasStackTraceContaining("payment.provider.fixed.authorization-validity must be positive"));
 	}
 
 	@Configuration(proxyBeanMethods = false)

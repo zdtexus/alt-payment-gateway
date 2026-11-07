@@ -10,9 +10,12 @@ import org.junit.jupiter.params.provider.NullSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import com.example.payment_service.entity.PaymentMethod;
+import com.example.payment_service.error.ManualCaptureNotSupportedException;
+import com.example.payment_service.provider.PaymentProviderRegistryTests.AuthorizationProvider;
 import com.example.payment_service.provider.PaymentProviderRegistryTests.NamedProvider;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
 
 class PaymentProviderRouterTests {
@@ -86,6 +89,24 @@ class PaymentProviderRouterTests {
 			.withMessageContaining("default-provider (PAYMENT_PROVIDER_DEFAULT) names unknown payment provider 'missing'")
 			.withMessageContaining("routes.CARD (PAYMENT_PROVIDER_ROUTES_CARD) names unknown payment provider 'stripe'")
 			.withMessageContaining("routes.KVIK (PAYMENT_PROVIDER_ROUTES_KVIK) names unknown payment provider 'paypal'");
+	}
+
+	@Test
+	void manualCaptureUsesTheMethodsOwnProviderWhenItCanAuthorize() {
+		AuthorizationProvider authorizing = new AuthorizationProvider("authorizing", true);
+		AuthorizationProvider switchedOff = new AuthorizationProvider("switched-off", false);
+		PaymentProviderRouter router = new PaymentProviderRouter(
+				new PaymentProviderRegistry(List.of(simulated, authorizing, switchedOff)),
+				new PaymentProviderProperties("simulated",
+						Map.of(PaymentMethod.CARD, "authorizing", PaymentMethod.BONUS, "switched-off")));
+
+		assertThat(router.authorizingProviderFor(PaymentMethod.CARD)).isSameAs(authorizing);
+		assertThatExceptionOfType(ManualCaptureNotSupportedException.class)
+			.isThrownBy(() -> router.authorizingProviderFor(PaymentMethod.BONUS))
+			.withMessage("Manual capture is not supported for BONUS payments");
+		assertThatExceptionOfType(ManualCaptureNotSupportedException.class)
+			.isThrownBy(() -> router.authorizingProviderFor(PaymentMethod.KVIK))
+			.withMessage("Manual capture is not supported for KVIK payments");
 	}
 
 	private PaymentProviderRouter router(String defaultProvider, Map<PaymentMethod, String> routes) {
