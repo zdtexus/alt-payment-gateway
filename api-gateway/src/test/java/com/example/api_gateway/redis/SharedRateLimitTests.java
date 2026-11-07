@@ -12,10 +12,13 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.utility.DockerImageName;
 
 import org.springframework.boot.builder.SpringApplicationBuilder;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.boot.web.server.context.WebServerApplicationContext;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.test.web.reactive.server.WebTestClient;
@@ -24,6 +27,7 @@ import com.example.api_gateway.ApiGatewayApplication;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+@ExtendWith(OutputCaptureExtension.class)
 class SharedRateLimitTests {
 
 	private static final int BURST = 5;
@@ -78,6 +82,21 @@ class SharedRateLimitTests {
 	@Test
 	void gatewaysRunAsSeparateInstances() {
 		assertThat(List.of(port(gatewayA), port(gatewayB), port(gatewayOnOtherRedis))).doesNotHaveDuplicates();
+	}
+
+	@Test
+	void startupLinesShowWhichInstancesShareARedis(CapturedOutput output) {
+		String shared = "Rate limits stored in Redis at " + SHARED_REDIS.getHost() + ":" + SHARED_REDIS.getMappedPort(6379)
+				+ " (TLS off)";
+		String other = "Rate limits stored in Redis at " + OTHER_REDIS.getHost() + ":" + OTHER_REDIS.getMappedPort(6379)
+				+ " (TLS off)";
+
+		assertThat(occurrences(output.getAll(), shared)).isEqualTo(2);
+		assertThat(occurrences(output.getAll(), other)).isEqualTo(1);
+	}
+
+	private static int occurrences(String text, String line) {
+		return text.split(java.util.regex.Pattern.quote(line), -1).length - 1;
 	}
 
 	@Test

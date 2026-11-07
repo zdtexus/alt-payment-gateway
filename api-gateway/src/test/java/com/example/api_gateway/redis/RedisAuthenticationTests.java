@@ -55,7 +55,9 @@ class RedisAuthenticationTests extends GatewayAgainstRedisTestSupport {
 	void passwordIsNeverLoggedOrPrinted(CapturedOutput output) {
 		send("auth-key-log", 2);
 
-		assertThat(output).doesNotContain(PASSWORD);
+		assertThat(output).contains("Rate limits stored in Redis at " + AUTH_REDIS.getHost() + ":"
+				+ AUTH_REDIS.getMappedPort(6379) + " (TLS off)")
+			.doesNotContain(PASSWORD);
 		assertThat(context.getBean(DataRedisProperties.class).toString()).doesNotContain(PASSWORD);
 		assertThat(context.getBean(DataRedisConnectionDetails.class).toString()).doesNotContain(PASSWORD);
 		assertThat(context.getBean(ReactiveRedisConnectionFactory.class).toString()).doesNotContain(PASSWORD);
