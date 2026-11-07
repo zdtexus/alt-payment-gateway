@@ -248,7 +248,8 @@ class PaymentControllerTests {
 	}
 
 	private static PaymentResponse payment(TransactionStatus status, String declineReason) {
-		return new PaymentResponse(PAYMENT_ID, new BigDecimal("49.90"), "EUR", PaymentMethod.CARD, status,
+		return new PaymentResponse(PAYMENT_ID, new BigDecimal("49.90"), new BigDecimal("0.00"), "EUR",
+				PaymentMethod.CARD, status,
 				declineReason, Instant.parse("2026-01-15T10:30:00Z"), Instant.parse("2026-01-15T10:30:01Z"));
 	}
 

@@ -77,15 +77,15 @@ public class PaymentController {
 			content = @Content(mediaType = "application/json", schema = @Schema(implementation = PaymentResponse.class),
 					examples = {
 							@ExampleObject(name = "SUCCEEDED", value = """
-									{"id": "7f8e2a1c-4b3d-4e5f-9a6b-1c2d3e4f5a6b", "amount": 49.90, "currency": "EUR",
+									{"id": "7f8e2a1c-4b3d-4e5f-9a6b-1c2d3e4f5a6b", "amount": 49.90, "refundedAmount": 0.00, "currency": "EUR",
 									 "paymentMethod": "CARD", "status": "SUCCEEDED", "declineReason": null,
 									 "createdAt": "2026-01-15T10:30:00Z", "processedAt": "2026-01-15T10:30:00.300Z"}"""),
 							@ExampleObject(name = "DECLINED", value = """
-									{"id": "7f8e2a1c-4b3d-4e5f-9a6b-1c2d3e4f5a6b", "amount": 49.90, "currency": "EUR",
+									{"id": "7f8e2a1c-4b3d-4e5f-9a6b-1c2d3e4f5a6b", "amount": 49.90, "refundedAmount": 0.00, "currency": "EUR",
 									 "paymentMethod": "CARD", "status": "DECLINED", "declineReason": "Insufficient funds",
 									 "createdAt": "2026-01-15T10:30:00Z", "processedAt": "2026-01-15T10:30:00.300Z"}"""),
 							@ExampleObject(name = "PENDING", value = """
-									{"id": "7f8e2a1c-4b3d-4e5f-9a6b-1c2d3e4f5a6b", "amount": 49.90, "currency": "EUR",
+									{"id": "7f8e2a1c-4b3d-4e5f-9a6b-1c2d3e4f5a6b", "amount": 49.90, "refundedAmount": 0.00, "currency": "EUR",
 									 "paymentMethod": "CARD", "status": "PENDING", "declineReason": null,
 									 "createdAt": "2026-01-15T10:30:00Z", "processedAt": null}""") }),
 			headers = {

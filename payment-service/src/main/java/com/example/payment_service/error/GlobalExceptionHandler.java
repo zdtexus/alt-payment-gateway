@@ -94,6 +94,11 @@ public class GlobalExceptionHandler {
 		return error(HttpStatus.UNPROCESSABLE_CONTENT, "PAYMENT_RULE_VIOLATION", ex.getMessage(), request);
 	}
 
+	@ExceptionHandler(RefundNotFoundException.class)
+	ResponseEntity<ErrorResponse> handleRefundNotFound(RefundNotFoundException ex, HttpServletRequest request) {
+		return error(HttpStatus.NOT_FOUND, "REFUND_NOT_FOUND", ex.getMessage(), request);
+	}
+
 	@ExceptionHandler(PaymentNotRefundableException.class)
 	ResponseEntity<ErrorResponse> handlePaymentNotRefundable(PaymentNotRefundableException ex,
 			HttpServletRequest request) {

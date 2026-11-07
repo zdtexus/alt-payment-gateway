@@ -337,6 +337,42 @@ class RefundServiceTests {
 			.isEqualTo(RefundRequestHasher.hash(PAYMENT_ID, new BigDecimal("5.00"), "Late delivery"));
 	}
 
+	@Test
+	void listsThePaymentsRefundsWithItsCurrency() {
+		given(transactionRepository.findByIdAndMerchantId(PAYMENT_ID, MERCHANT_ID)).willReturn(Optional.of(payment));
+		given(refundRepository.findByTransactionIdOrderByCreatedAtAscIdAsc(PAYMENT_ID))
+			.willReturn(java.util.List.of(existingRefund("h")));
+
+		assertThat(refundService.list(merchant, PAYMENT_ID)).singleElement().satisfies((refund) -> {
+			assertThat(refund.id()).isEqualTo(REFUND_ID);
+			assertThat(refund.paymentId()).isEqualTo(PAYMENT_ID);
+			assertThat(refund.currency()).isEqualTo("EUR");
+		});
+	}
+
+	@Test
+	void listingAnotherMerchantsPaymentIsNotFound() {
+		UUID other = UUID.randomUUID();
+		given(transactionRepository.findByIdAndMerchantId(other, MERCHANT_ID)).willReturn(Optional.empty());
+
+		assertThatExceptionOfType(PaymentNotFoundException.class).isThrownBy(() -> refundService.list(merchant, other));
+		verify(refundRepository, never()).findByTransactionIdOrderByCreatedAtAscIdAsc(any());
+	}
+
+	@Test
+	void getsOneRefundOfThePaymentOnly() {
+		given(transactionRepository.findByIdAndMerchantId(PAYMENT_ID, MERCHANT_ID)).willReturn(Optional.of(payment));
+		given(refundRepository.findByIdAndTransactionId(REFUND_ID, PAYMENT_ID))
+			.willReturn(Optional.of(existingRefund("h")));
+		UUID otherRefund = UUID.randomUUID();
+		given(refundRepository.findByIdAndTransactionId(otherRefund, PAYMENT_ID)).willReturn(Optional.empty());
+
+		assertThat(refundService.get(merchant, PAYMENT_ID, REFUND_ID).id()).isEqualTo(REFUND_ID);
+		assertThatExceptionOfType(com.example.payment_service.error.RefundNotFoundException.class)
+			.isThrownBy(() -> refundService.get(merchant, PAYMENT_ID, otherRefund))
+			.withMessage("Refund " + otherRefund + " not found");
+	}
+
 	private Refund existingRefund(String requestHash) {
 		Refund refund = new Refund();
 		refund.setId(REFUND_ID);

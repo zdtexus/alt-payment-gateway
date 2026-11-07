@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.EnumSet;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -12,6 +13,7 @@ import org.slf4j.LoggerFactory;
 
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.StringUtils;
 
@@ -25,6 +27,7 @@ import com.example.payment_service.error.IdempotencyKeyReusedException;
 import com.example.payment_service.error.PaymentNotFoundException;
 import com.example.payment_service.error.PaymentNotRefundableException;
 import com.example.payment_service.error.RefundExceedsRemainingException;
+import com.example.payment_service.error.RefundNotFoundException;
 import com.example.payment_service.error.RefundNotSupportedException;
 import com.example.payment_service.provider.PaymentProviderRegistry;
 import com.example.payment_service.provider.ProviderResult;
@@ -175,6 +178,25 @@ public class RefundService {
 		}
 		refund.setProcessedAt(Instant.now().truncatedTo(ChronoUnit.MICROS));
 		refund.setNextCheckAt(null);
+	}
+
+	@Transactional(readOnly = true)
+	public List<RefundResponse> list(Merchant merchant, UUID paymentId) {
+		Transaction payment = transactionRepository.findByIdAndMerchantId(paymentId, merchant.getId())
+			.orElseThrow(() -> new PaymentNotFoundException(paymentId));
+		return refundRepository.findByTransactionIdOrderByCreatedAtAscIdAsc(paymentId)
+			.stream()
+			.map((refund) -> RefundResponse.from(refund, paymentId, payment.getCurrency()))
+			.toList();
+	}
+
+	@Transactional(readOnly = true)
+	public RefundResponse get(Merchant merchant, UUID paymentId, UUID refundId) {
+		Transaction payment = transactionRepository.findByIdAndMerchantId(paymentId, merchant.getId())
+			.orElseThrow(() -> new PaymentNotFoundException(paymentId));
+		return refundRepository.findByIdAndTransactionId(refundId, paymentId)
+			.map((refund) -> RefundResponse.from(refund, paymentId, payment.getCurrency()))
+			.orElseThrow(() -> new RefundNotFoundException(refundId));
 	}
 
 	private static RefundResponse response(Refund refund) {

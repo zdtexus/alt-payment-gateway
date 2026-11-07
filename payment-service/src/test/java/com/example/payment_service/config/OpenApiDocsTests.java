@@ -102,8 +102,8 @@ class OpenApiDocsTests {
 		mvc.perform(get("/v3/api-docs"))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.components.schemas.PaymentResponse.properties.keys()",
-					containsInAnyOrder("id", "amount", "currency", "paymentMethod", "status", "declineReason",
-							"createdAt", "processedAt")))
+					containsInAnyOrder("id", "amount", "refundedAmount", "currency", "paymentMethod", "status",
+							"declineReason", "createdAt", "processedAt")))
 			.andExpect(jsonPath("$..provider").isEmpty())
 			.andExpect(jsonPath("$..providerReference").isEmpty());
 	}
@@ -144,6 +144,36 @@ class OpenApiDocsTests {
 			.andExpect(jsonPath("$.info.description", not(containsString("	"))))
 			.andExpect(jsonPath("$.info.description",
 					containsString("`DECLINED`, and a final status never changes.")));
+	}
+
+	@Test
+	void documentsRefundEndpoints() throws Exception {
+		String refunds = "$.paths['/api/v1/payments/{paymentId}/refunds']";
+		String create = refunds + ".post";
+		mvc.perform(get("/v3/api-docs"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath(create + ".summary").value("Refund a payment"))
+			.andExpect(jsonPath(create + ".responses.keys()",
+					containsInAnyOrder("201", "400", "401", "403", "404", "409", "422")))
+			.andExpect(jsonPath(create + ".responses['201'].content['application/json'].schema['$ref']")
+				.value("#/components/schemas/RefundResponse"))
+			.andExpect(jsonPath(create + ".responses['201'].headers.Location").exists())
+			.andExpect(jsonPath(create + ".responses['201'].headers['Idempotent-Replayed']").exists())
+			.andExpect(jsonPath(create + ".requestBody").exists())
+			.andExpect(jsonPath(create + ".requestBody.required").doesNotExist())
+			.andExpect(jsonPath(create + ".parameters[?(@.name == 'Idempotency-Key')].schema.maxLength").value(255))
+			.andExpect(jsonPath(create
+					+ ".responses['422'].content['application/json'].examples.REFUND_EXCEEDS_REMAINING.value.message")
+				.value("Refund 30.00 exceeds the remaining refundable amount 20.00"))
+			.andExpect(jsonPath(create + ".responses['409']..error")
+				.value(hasItem("PAYMENT_NOT_REFUNDABLE")))
+			.andExpect(jsonPath(refunds + ".get.responses['200'].content['application/json'].schema.items['$ref']")
+				.value("#/components/schemas/RefundResponse"))
+			.andExpect(jsonPath("$.paths['/api/v1/payments/{paymentId}/refunds/{refundId}'].get.summary")
+				.value("Get a refund"))
+			.andExpect(jsonPath("$.components.schemas.CreateRefundRequest.properties.amount.example").value(20.00))
+			.andExpect(jsonPath("$.components.schemas.PaymentResponse.properties.refundedAmount.description",
+					containsString("stays SUCCEEDED")));
 	}
 
 	@Test

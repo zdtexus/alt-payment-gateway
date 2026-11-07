@@ -1,9 +1,14 @@
 package com.example.payment_service.service;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.EnumSet;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -33,6 +38,9 @@ import com.example.payment_service.provider.ProviderRequest;
 import com.example.payment_service.provider.ProviderResult;
 import com.example.payment_service.provider.ProviderWebhook;
 import com.example.payment_service.reconciliation.ReconciliationProperties;
+import com.example.payment_service.repository.RefundRepository;
+import com.example.payment_service.repository.RefundTotal;
+import com.example.payment_service.entity.RefundStatus;
 import com.example.payment_service.repository.TransactionRepository;
 import com.example.payment_service.rules.PaymentRuleValidator;
 
@@ -55,15 +63,19 @@ public class PaymentService {
 
 	private final ReconciliationProperties reconciliation;
 
+	private final RefundRepository refundRepository;
+
 	public PaymentService(TransactionRepository transactionRepository, PaymentRuleValidator ruleValidator,
 			PaymentProviderRouter providerRouter, ApplicationEventPublisher eventPublisher,
-			TransactionTemplate transactionTemplate, ReconciliationProperties reconciliation) {
+			TransactionTemplate transactionTemplate, ReconciliationProperties reconciliation,
+			RefundRepository refundRepository) {
 		this.transactionRepository = transactionRepository;
 		this.ruleValidator = ruleValidator;
 		this.providerRouter = providerRouter;
 		this.eventPublisher = eventPublisher;
 		this.transactionTemplate = transactionTemplate;
 		this.reconciliation = reconciliation;
+		this.refundRepository = refundRepository;
 	}
 
 	public PaymentResponse process(Merchant merchant, CreatePaymentRequest request) {
@@ -99,7 +111,7 @@ public class PaymentService {
 				if (!existing.getRequestHash().equals(requestHash)) {
 					throw new IdempotencyKeyReusedException();
 				}
-				return new PaymentOutcome(PaymentResponse.from(existing), true);
+				return new PaymentOutcome(withRefunds(existing), true);
 			});
 	}
 
@@ -134,7 +146,7 @@ public class PaymentService {
 		catch (RuntimeException ex) {
 			log.error("Payment provider {} failed for payment {}; the payment stays PENDING",
 					pending.provider().name(), transaction.getId(), ex);
-			return new PaymentOutcome(PaymentResponse.from(transaction), false);
+			return new PaymentOutcome(PaymentResponse.from(transaction, PaymentResponse.NOTHING_REFUNDED), false);
 		}
 		return transactionTemplate.execute((status) -> applyResult(transaction.getId(), result));
 	}
@@ -148,7 +160,7 @@ public class PaymentService {
 			log.warn("Payment {} was already {} when its provider answered; the answer is ignored", paymentId,
 					transaction.getStatus());
 		}
-		return new PaymentOutcome(PaymentResponse.from(transaction), false);
+		return new PaymentOutcome(PaymentResponse.from(transaction, PaymentResponse.NOTHING_REFUNDED), false);
 	}
 
 	public TransactionStatus settleFromStatusCheck(UUID paymentId, ProviderResult result) {
@@ -214,7 +226,7 @@ public class PaymentService {
 	@Transactional(readOnly = true)
 	public PaymentResponse get(Merchant merchant, UUID id) {
 		return transactionRepository.findByIdAndMerchantId(id, merchant.getId())
-			.map(PaymentResponse::from)
+			.map(this::withRefunds)
 			.orElseThrow(() -> new PaymentNotFoundException(id));
 	}
 
@@ -224,7 +236,24 @@ public class PaymentService {
 		Page<Transaction> transactions = (status != null)
 				? transactionRepository.findByMerchantIdAndStatus(merchant.getId(), status, pageable)
 				: transactionRepository.findByMerchantId(merchant.getId(), pageable);
-		return PageResponse.from(transactions, PaymentResponse::from);
+		Map<UUID, BigDecimal> refunded = refundedAmounts(transactions.getContent());
+		return PageResponse.from(transactions, (transaction) -> PaymentResponse.from(transaction,
+				refunded.getOrDefault(transaction.getId(), PaymentResponse.NOTHING_REFUNDED)));
+	}
+
+	private PaymentResponse withRefunds(Transaction transaction) {
+		BigDecimal refunded = refundRepository.sumAmount(transaction.getId(), EnumSet.of(RefundStatus.SUCCEEDED));
+		return PaymentResponse.from(transaction, refunded.setScale(2));
+	}
+
+	private Map<UUID, BigDecimal> refundedAmounts(List<Transaction> transactions) {
+		if (transactions.isEmpty()) {
+			return Map.of();
+		}
+		return refundRepository
+			.sumAmountByPayment(transactions.stream().map(Transaction::getId).toList(), RefundStatus.SUCCEEDED)
+			.stream()
+			.collect(Collectors.toMap(RefundTotal::getPaymentId, (total) -> total.getAmount().setScale(2)));
 	}
 
 	private record PendingPayment(Transaction transaction, PaymentProvider provider) {

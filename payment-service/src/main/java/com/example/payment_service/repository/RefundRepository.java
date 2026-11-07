@@ -25,6 +25,16 @@ public interface RefundRepository extends JpaRepository<Refund, UUID> {
 	@Lock(LockModeType.PESSIMISTIC_WRITE)
 	Optional<Refund> findLockedById(UUID id);
 
+	Optional<Refund> findByIdAndTransactionId(UUID id, UUID transactionId);
+
+	@Query("""
+			SELECT r.transaction.id AS paymentId, SUM(r.amount) AS amount FROM Refund r
+			WHERE r.transaction.id IN :transactionIds AND r.status = :status
+			GROUP BY r.transaction.id
+			""")
+	List<RefundTotal> sumAmountByPayment(@Param("transactionIds") Collection<UUID> transactionIds,
+			@Param("status") RefundStatus status);
+
 	@Query("""
 			SELECT COALESCE(SUM(r.amount), 0) FROM Refund r
 			WHERE r.transaction.id = :transactionId AND r.status IN :statuses

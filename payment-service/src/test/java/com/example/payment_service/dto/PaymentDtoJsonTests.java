@@ -42,12 +42,13 @@ class PaymentDtoJsonTests {
 
 	@Test
 	void writesPaymentResponseWithoutProviderDetails() throws Exception {
-		PaymentResponse response = PaymentResponse.from(declinedTransaction());
+		PaymentResponse response = PaymentResponse.from(declinedTransaction(), new BigDecimal("0.00"));
 
 		assertThat(responseJson.write(response)).isStrictlyEqualToJson("""
 				{
 				  "id": "7f8e2a1c-4b3d-4e5f-9a6b-1c2d3e4f5a6b",
 				  "amount": 600.00,
+				  "refundedAmount": 0.00,
 				  "currency": "EUR",
 				  "paymentMethod": "CARD",
 				  "status": "DECLINED",
@@ -59,10 +60,25 @@ class PaymentDtoJsonTests {
 	}
 
 	@Test
+	void refundedPaymentKeepsItsStatusAndShowsTheRefundedSum() throws Exception {
+		Transaction transaction = declinedTransaction();
+		transaction.setStatus(TransactionStatus.SUCCEEDED);
+		transaction.setDeclineReason(null);
+
+		assertThat(responseJson.write(PaymentResponse.from(transaction, new BigDecimal("20.00"))))
+			.extractingJsonPathStringValue("$.status")
+			.isEqualTo("SUCCEEDED");
+		assertThat(responseJson.write(PaymentResponse.from(transaction, new BigDecimal("20.00"))))
+			.extractingJsonPathNumberValue("$.refundedAmount")
+			.isEqualTo(20.00);
+	}
+
+	@Test
 	void pageResponseMapsContentAndPaging() {
 		PageImpl<Transaction> page = new PageImpl<>(List.of(declinedTransaction()), PageRequest.of(1, 1), 3);
 
-		PageResponse<PaymentResponse> response = PageResponse.from(page, PaymentResponse::from);
+		PageResponse<PaymentResponse> response = PageResponse.from(page,
+				(transaction) -> PaymentResponse.from(transaction, PaymentResponse.NOTHING_REFUNDED));
 
 		assertThat(response.content()).extracting(PaymentResponse::id).containsExactly(PAYMENT_ID);
 		assertThat(response.page()).isEqualTo(1);

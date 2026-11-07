@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -40,6 +41,9 @@ import com.example.payment_service.provider.ProviderRequest;
 import com.example.payment_service.provider.ProviderResult;
 import com.example.payment_service.provider.ProviderWebhook;
 import com.example.payment_service.reconciliation.ReconciliationProperties;
+import com.example.payment_service.entity.RefundStatus;
+import com.example.payment_service.repository.RefundRepository;
+import com.example.payment_service.repository.RefundTotal;
 import com.example.payment_service.repository.TransactionRepository;
 import com.example.payment_service.rules.PaymentRuleValidator;
 
@@ -77,12 +81,15 @@ class PaymentServiceTests {
 
 	private final PlatformTransactionManager transactionManager = mock();
 
+	private final RefundRepository refundRepository = mock();
+
 	private static final Duration MIN_AGE = Duration.ofMinutes(2);
 
 	private final PaymentService paymentService = new PaymentService(transactionRepository, ruleValidator,
 			providerRouter, eventPublisher, new TransactionTemplate(transactionManager),
 			new ReconciliationProperties(true, Duration.ofMinutes(1), MIN_AGE, 50, Duration.ofHours(1),
-					Duration.ofHours(24)));
+					Duration.ofHours(24)),
+			refundRepository);
 
 	private final Merchant merchant = new Merchant();
 
@@ -91,6 +98,12 @@ class PaymentServiceTests {
 	private final AtomicReference<String> providerWhenSaved = new AtomicReference<>();
 
 	private final AtomicReference<Instant> nextCheckWhenSaved = new AtomicReference<>();
+
+	@BeforeEach
+	void nothingRefundedByDefault() {
+		given(refundRepository.sumAmount(any(), any())).willReturn(new BigDecimal("0"));
+		given(refundRepository.sumAmountByPayment(any(), any())).willReturn(List.of());
+	}
 
 	@BeforeEach
 	void assignIdOnSave() {
@@ -266,6 +279,71 @@ class PaymentServiceTests {
 			.willReturn(Optional.of(transaction));
 
 		assertThat(paymentService.get(merchant, PAYMENT_ID).id()).isEqualTo(PAYMENT_ID);
+	}
+
+	@Test
+	void getShowsTheSumOfSucceededRefunds() {
+		merchant.setId(MERCHANT_ID);
+		given(transactionRepository.findByIdAndMerchantId(PAYMENT_ID, MERCHANT_ID))
+			.willReturn(Optional.of(transaction()));
+		given(refundRepository.sumAmount(PAYMENT_ID, EnumSet.of(RefundStatus.SUCCEEDED)))
+			.willReturn(new BigDecimal("20"));
+
+		PaymentResponse payment = paymentService.get(merchant, PAYMENT_ID);
+
+		assertThat(payment.refundedAmount()).isEqualTo(new BigDecimal("20.00"));
+		assertThat(payment.status()).isEqualTo(TransactionStatus.SUCCEEDED);
+	}
+
+	@Test
+	void listAsksForTheRefundTotalsOfTheWholePageAtOnce() {
+		merchant.setId(MERCHANT_ID);
+		Transaction refunded = transaction();
+		Transaction untouched = transaction();
+		untouched.setId(UUID.randomUUID());
+		given(transactionRepository.findByMerchantId(eq(MERCHANT_ID), any()))
+			.willReturn(new PageImpl<>(List.of(refunded, untouched)));
+		given(refundRepository.sumAmountByPayment(List.of(PAYMENT_ID, untouched.getId()), RefundStatus.SUCCEEDED))
+			.willReturn(List.of(total(PAYMENT_ID, "15.5")));
+
+		PageResponse<PaymentResponse> page = paymentService.list(merchant, null, 0, 20);
+
+		assertThat(page.content()).extracting(PaymentResponse::refundedAmount)
+			.containsExactly(new BigDecimal("15.50"), new BigDecimal("0.00"));
+		verify(refundRepository).sumAmountByPayment(any(), any());
+		verify(refundRepository, never()).sumAmount(any(), any());
+	}
+
+	@Test
+	void anEmptyPageAsksForNoRefundTotals() {
+		merchant.setId(MERCHANT_ID);
+		given(transactionRepository.findByMerchantId(eq(MERCHANT_ID), any())).willReturn(Page.empty());
+
+		paymentService.list(merchant, null, 0, 20);
+
+		verifyNoInteractions(refundRepository);
+	}
+
+	@Test
+	void aNewPaymentHasNothingRefundedWithoutAQuery() {
+		given(paymentProvider.process(any())).willReturn(ProviderResult.approved());
+
+		assertThat(paymentService.process(merchant, REQUEST).refundedAmount()).isEqualTo(new BigDecimal("0.00"));
+		verifyNoInteractions(refundRepository);
+	}
+
+	private static RefundTotal total(UUID paymentId, String amount) {
+		return new RefundTotal() {
+			@Override
+			public UUID getPaymentId() {
+				return paymentId;
+			}
+
+			@Override
+			public BigDecimal getAmount() {
+				return new BigDecimal(amount);
+			}
+		};
 	}
 
 	@Test
