@@ -170,6 +170,7 @@ Services are configured through environment variables. Defaults are suitable for
 | `RATE_LIMIT_IP_BURST_CAPACITY` | api-gateway | `40` | Requests one client IP may send at once. At least `RATE_LIMIT_IP_REPLENISH_RATE`. |
 | `RATE_LIMIT_WEBHOOK_REPLENISH_RATE` | api-gateway | `50` | Provider webhooks per second one client IP may send |
 | `RATE_LIMIT_WEBHOOK_BURST_CAPACITY` | api-gateway | `100` | Provider webhooks one client IP may send at once. At least `RATE_LIMIT_WEBHOOK_REPLENISH_RATE`. |
+| `TRUSTED_PROXIES` | api-gateway | | Reverse proxies or load balancers in front of the gateway, as comma-separated IPs and CIDRs, for example `10.0.0.0/8, 192.168.1.10` (`rate-limit.trusted-proxies`). Only requests from these addresses may set the client IP with `X-Forwarded-For`. Empty trusts no proxy. An invalid entry stops startup. See [Client IP behind a proxy](#client-ip-behind-a-proxy). |
 
 With Docker Compose, put any of these in `.env` (see the commented examples in `.env.example`) and run `docker compose up -d` to apply them. Settings that are not set keep their defaults. `DB_URL`, `MAIL_HOST`, `MAIL_PORT`, `PAYMENT_SERVICE_URL`, `REDIS_HOST` and `REDIS_PORT` are fixed in `docker-compose.yml` to point at the containers.
 
@@ -305,7 +306,7 @@ In Swagger UI, the admin endpoints are listed under **Merchant administration** 
 
 The gateway limits `/api/v1/**` per API key with a token bucket stored in Redis. Each key may send `RATE_LIMIT_BURST_CAPACITY` requests at once (default 20), and the bucket refills at `RATE_LIMIT_REPLENISH_RATE` requests per second (default 10). Requests without an API key share a bucket per client IP. `/admin/**` and the API docs are not limited. Provider webhooks have their own limit (see below).
 
-A second, looser limit applies per client IP across all keys (`RATE_LIMIT_IP_BURST_CAPACITY`, default 40, refilled at `RATE_LIMIT_IP_REPLENISH_RATE`, default 20 per second). Without it, someone guessing keys could send a different key with every request and never be limited, because every unknown key starts with a full bucket. Only requests that pass their key's limit count against the IP limit, so a client retrying a key that is already limited doesn't use up the allowance of other merchants behind the same IP. The client IP is the address of the TCP connection; `X-Forwarded-For` is ignored because clients can set it freely.
+A second, looser limit applies per client IP across all keys (`RATE_LIMIT_IP_BURST_CAPACITY`, default 40, refilled at `RATE_LIMIT_IP_REPLENISH_RATE`, default 20 per second). Without it, someone guessing keys could send a different key with every request and never be limited, because every unknown key starts with a full bucket. Only requests that pass their key's limit count against the IP limit, so a client retrying a key that is already limited doesn't use up the allowance of other merchants behind the same IP. The client IP is the address of the TCP connection, unless that address is a trusted proxy (see below).
 
 Provider webhooks (`/api/v1/providers/*/webhook`) carry no API key and come from a few provider servers, often in bursts, so they have their own route with only a per-IP limit (`RATE_LIMIT_WEBHOOK_BURST_CAPACITY`, default 100, refilled at `RATE_LIMIT_WEBHOOK_REPLENISH_RATE`, default 50 per second). It is kept apart from the merchant limits in both directions: webhooks never use a merchant's allowance, and merchant traffic from the same IP never blocks webhooks. A limited webhook gets `429` with `Retry-After`; providers retry webhooks that weren't accepted.
 
@@ -320,6 +321,19 @@ The bucket is identified by a SHA-256 hash of the API key, so Redis never holds 
   "path": "/api/v1/payments"
 }
 ```
+
+#### Client IP behind a proxy
+
+Behind a reverse proxy or load balancer, every request arrives from the proxy's address, so without more setup all clients would share one per-IP bucket. List the proxies in `TRUSTED_PROXIES` (IPs or CIDRs, comma-separated). The gateway then reads `X-Forwarded-For` for requests whose TCP peer is in that list:
+
+- The header is read from the right, because each proxy appends the address it received the request from. Addresses that are themselves trusted proxies are skipped, and the first address that isn't is the client IP. Entries further left were written by the client and are never used, so a client can't choose its bucket by sending its own `X-Forwarded-For`.
+- If every address in the header is a trusted proxy, the left-most one is used. Without the header, the proxy's own address is used.
+- If an entry can't be read as an IP address, with or without a port, the proxy's own address is used, because nothing to the left of it can be trusted.
+- For a request from an address outside the list, the header is ignored.
+
+This applies to all three limits: per API key for requests without a key, per client IP, and per webhook sender. With the default empty list, the client IP is always the TCP peer. The gateway logs at startup which mode is active.
+
+Only list addresses you control. Trusting a range that clients can connect from would let them pick their own bucket. With Docker Compose and no proxy in front, leave it empty: requests from the host arrive from the Docker network gateway (for example `172.18.0.1`), which isn't a proxy that writes `X-Forwarded-For`.
 
 #### When Redis is down
 
