@@ -1,0 +1,4 @@
+services:
+  api-gateway:
+    ports: !override
+      - "8080-8081:8080"

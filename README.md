@@ -163,6 +163,9 @@ Services are configured through environment variables. Defaults are suitable for
 | `PAYMENT_SERVICE_URL` | api-gateway | `http://localhost:8081` | Upstream payment service |
 | `REDIS_HOST` | api-gateway | `localhost` | Redis host |
 | `REDIS_PORT` | api-gateway | `6379` | Redis port |
+| `REDIS_USERNAME` | api-gateway | | Redis ACL user, for a Redis that requires one (`spring.data.redis.username`) |
+| `REDIS_PASSWORD` | api-gateway | | Redis password (`spring.data.redis.password`). Never logged. |
+| `REDIS_SSL` | api-gateway | `false` | Connect to Redis over TLS (`spring.data.redis.ssl.enabled`) |
 | `REDIS_TIMEOUT` | api-gateway | `250ms` | Redis connect and command timeout. Bounds how much a slow or hung Redis can delay a request. |
 | `RATE_LIMIT_REPLENISH_RATE` | api-gateway | `10` | Requests per second each API key (or client IP without a key) may make on `/api/v1/**` over time |
 | `RATE_LIMIT_BURST_CAPACITY` | api-gateway | `20` | Requests allowed at once before the per-second rate applies. At least `RATE_LIMIT_REPLENISH_RATE`. |
@@ -172,11 +175,11 @@ Services are configured through environment variables. Defaults are suitable for
 | `RATE_LIMIT_WEBHOOK_BURST_CAPACITY` | api-gateway | `100` | Provider webhooks one client IP may send at once. At least `RATE_LIMIT_WEBHOOK_REPLENISH_RATE`. |
 | `TRUSTED_PROXIES` | api-gateway | | Reverse proxies or load balancers in front of the gateway, as comma-separated IPs and CIDRs, for example `10.0.0.0/8, 192.168.1.10` (`rate-limit.trusted-proxies`). Only requests from these addresses may set the client IP with `X-Forwarded-For`. Empty trusts no proxy. An invalid entry stops startup. See [Client IP behind a proxy](#client-ip-behind-a-proxy). |
 
-With Docker Compose, put any of these in `.env` (see the commented examples in `.env.example`) and run `docker compose up -d` to apply them. Settings that are not set keep their defaults. `DB_URL`, `MAIL_HOST`, `MAIL_PORT`, `PAYMENT_SERVICE_URL`, `REDIS_HOST` and `REDIS_PORT` are fixed in `docker-compose.yml` to point at the containers.
+With Docker Compose, put any of these in `.env` (see the commented examples in `.env.example`) and run `docker compose up -d` to apply them. Settings that are not set keep their defaults. `DB_URL`, `MAIL_HOST`, `MAIL_PORT`, `PAYMENT_SERVICE_URL`, `REDIS_HOST` and `REDIS_PORT` are fixed in `docker-compose.yml` to point at the containers. The bundled Redis has no password, so `REDIS_USERNAME`, `REDIS_PASSWORD` and `REDIS_SSL` are not passed to the gateway there; they are for running the gateway against another Redis, such as a managed one.
 
 The gateway refuses to start when a rate limit is below 1 or its burst capacity is smaller than its replenish rate. The service refuses to start with invalid settings, for example a `PAYMENT_PROVIDER_DEFAULT` or route that names no registered provider, a payment method left without a provider, a missing or short `ADMIN_API_KEY`, a success rate outside `0.0`–`1.0`, a `fixed` outcome other than `approve`/`decline` or a blank decline reason, an `http` provider timeout that is zero or negative, an `http` webhook secret shorter than 16 characters, an unknown SMS provider, or `SMS_PROVIDER=http` without a URL.
 
-Secret settings (`ADMIN_API_KEY`, `NOTIFICATION_SMS_HTTP_API_KEY`, `PAYMENT_PROVIDER_HTTP_API_KEY`, `PAYMENT_PROVIDER_HTTP_WEBHOOK_SECRET`) are never written to logs or error messages. The settings and response classes that hold them print `***` instead of the value, and a test fails if any record in the code would print a field named like a key, secret, password or token. Keep real values in the gitignored `.env`; `.env.example` holds placeholders only.
+Secret settings (`ADMIN_API_KEY`, `NOTIFICATION_SMS_HTTP_API_KEY`, `PAYMENT_PROVIDER_HTTP_API_KEY`, `PAYMENT_PROVIDER_HTTP_WEBHOOK_SECRET`, `REDIS_PASSWORD`) are never written to logs or error messages. The settings and response classes that hold them print `***` instead of the value, and a test fails if any record in the code would print a field named like a key, secret, password or token. Keep real values in the gitignored `.env`; `.env.example` holds placeholders only.
 
 ### SMS providers
 
@@ -344,6 +347,29 @@ Rate limiting fails open: if Redis can't be reached, requests go through without
 - **Redis back:** the client reconnects on its own and limiting resumes without a restart.
 - During an outage, responses carry `X-RateLimit-Remaining: -1`. Requests made during the outage are not counted.
 - The log shows the outage once per reconnect attempt (`Reconnecting…`, `Cannot reconnect…`, `Reconnected…`) instead of an error for every request. A Redis that is connected but not answering is not logged; it only shows as the extra delay.
+- **Wrong Redis username or password:** also fails open, and isn't logged either. It shows only as `X-RateLimit-Remaining: -1` on every response, so check that header after changing credentials.
+
+#### Running several gateway instances
+
+The buckets live in Redis, not in the gateway, so several gateway instances enforce one shared limit **only if they all use the same Redis**. An instance pointed at its own Redis gives every client a second full burst on that instance. Nothing else needs to be shared: the gateway keeps no state of its own.
+
+- **Point every instance at one Redis** with the same `REDIS_HOST` and `REDIS_PORT`, plus `REDIS_USERNAME`, `REDIS_PASSWORD` and `REDIS_SSL` if that Redis needs them.
+- **Redis Cluster or Sentinel** are configured with Spring Boot's standard properties, for example `SPRING_DATA_REDIS_CLUSTER_NODES=redis-1:7000,redis-2:7001`, or `SPRING_DATA_REDIS_SENTINEL_MASTER` and `SPRING_DATA_REDIS_SENTINEL_NODES`. A bucket is stored as two keys, `request_rate_limiter.{<id>}.tokens` and `.timestamp`. The braces are a Redis Cluster hash tag, so both keys of a bucket are on the same slot and the limiter's script can update them together.
+- **Check it at startup.** Each instance logs where its limits are stored, without credentials:
+
+  ```text
+  Rate limits stored in Redis at redis:6379 (TLS off)
+  ```
+
+  For a Cluster or Sentinel the line names the nodes instead. All instances should print the same line.
+
+To try it locally, start two gateway instances on ports 8080 and 8081, both using the bundled Redis:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.scale.yml up -d --scale api-gateway=2
+```
+
+`docker-compose.scale.yml` only turns the gateway's host port into the range `8080-8081`, one port per instance. In production, put a load balancer in front of the instances instead, and list it in `TRUSTED_PROXIES` (see [Client IP behind a proxy](#client-ip-behind-a-proxy)). Run `docker compose up -d` without the extra file to go back to one instance on 8080.
 
 ### Payment methods
 
@@ -491,6 +517,7 @@ alt-payment-gateway/
 │       ├── rules/            Per-method currency and amount rules
 │       └── service/          Payment processing and merchant administration
 ├── docker-compose.yml
+├── docker-compose.scale.yml  Override for two gateway instances on ports 8080-8081
 ├── .env.example
 └── pom.xml               Aggregator for building both services
 ```
