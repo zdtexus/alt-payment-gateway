@@ -7,8 +7,10 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
+import com.example.payment_service.entity.RefundStatus;
 import com.example.payment_service.entity.TransactionStatus;
 import com.example.payment_service.event.PaymentProcessedEvent;
+import com.example.payment_service.event.RefundProcessedEvent;
 import com.example.payment_service.notification.email.EmailSender;
 import com.example.payment_service.notification.sms.SmsSender;
 
@@ -37,13 +39,51 @@ public class NotificationListener {
 		}
 	}
 
+	@Async
+	@TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+	public void onRefundProcessed(RefundProcessedEvent event) {
+		String subject = "Refund " + event.refundId() + " " + outcome(event);
+		if (event.merchantEmail() != null) {
+			sendSafely("email", "refund " + event.refundId(),
+					() -> emailSender.send(event.merchantEmail(), subject, emailBody(event)));
+		}
+		if (event.merchantPhone() != null) {
+			sendSafely("SMS", "refund " + event.refundId(), () -> smsSender.send(event.merchantPhone(), smsText(event)));
+		}
+	}
+
 	private static void sendSafely(String channel, PaymentProcessedEvent event, Runnable send) {
+		sendSafely(channel, "payment " + event.paymentId(), send);
+	}
+
+	private static void sendSafely(String channel, String subject, Runnable send) {
 		try {
 			send.run();
 		}
 		catch (RuntimeException ex) {
-			log.warn("Failed to send {} notification for payment {}", channel, event.paymentId(), ex);
+			log.warn("Failed to send {} notification for {}", channel, subject, ex);
 		}
+	}
+
+	static String emailBody(RefundProcessedEvent event) {
+		StringBuilder body = new StringBuilder()
+			.append("Hello ").append(event.merchantName()).append(",\n\n")
+			.append("Refund ").append(event.refundId()).append(" of payment ").append(event.paymentId()).append(' ')
+			.append(outcome(event)).append(".\n\n")
+			.append("Amount: ").append(event.amount().toPlainString()).append(' ').append(event.currency()).append('\n')
+			.append("Status: ").append(event.status()).append('\n');
+		if (event.declineReason() != null) {
+			body.append("Reason: ").append(event.declineReason()).append('\n');
+		}
+		return body.append("Processed at: ").append(event.processedAt()).append('\n').toString();
+	}
+
+	static String smsText(RefundProcessedEvent event) {
+		return "Refund " + event.amount().toPlainString() + " " + event.currency() + " " + outcome(event);
+	}
+
+	private static String outcome(RefundProcessedEvent event) {
+		return (event.status() == RefundStatus.SUCCEEDED) ? "succeeded" : "declined";
 	}
 
 	static String subject(PaymentProcessedEvent event) {

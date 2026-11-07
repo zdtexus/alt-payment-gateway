@@ -16,6 +16,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 
 import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -28,6 +29,7 @@ import com.example.payment_service.entity.RefundStatus;
 import com.example.payment_service.entity.Transaction;
 import com.example.payment_service.entity.TransactionStatus;
 import com.example.payment_service.error.IdempotencyKeyReusedException;
+import com.example.payment_service.event.RefundProcessedEvent;
 import com.example.payment_service.error.PaymentNotFoundException;
 import com.example.payment_service.error.PaymentNotRefundableException;
 import com.example.payment_service.error.RefundExceedsRemainingException;
@@ -76,9 +78,12 @@ class RefundServiceTests {
 
 	private final RefundingProvider provider = mock();
 
+	private final ApplicationEventPublisher eventPublisher = mock();
+
 	private final RefundService refundService = new RefundService(transactionRepository, refundRepository,
 			providerRegistry, new TransactionTemplate(transactionManager), new ReconciliationProperties(true,
-					Duration.ofMinutes(1), MIN_AGE, 50, Duration.ofHours(1), Duration.ofHours(24)));
+					Duration.ofMinutes(1), MIN_AGE, 50, Duration.ofHours(1), Duration.ofHours(24)),
+			eventPublisher);
 
 	private final Merchant merchant = new Merchant();
 
@@ -449,6 +454,59 @@ class RefundServiceTests {
 			.isEqualTo(RefundStatus.PENDING);
 		assertThat(refundService.settleFromStatusCheck(REFUND_ID, ProviderResult.approved("acme_r_1")))
 			.isEqualTo(RefundStatus.SUCCEEDED);
+	}
+
+	@Test
+	void aFinalAnswerPublishesOneRefundEventWithTheMerchantsContacts() {
+		merchant.setName("Demo Shop");
+		merchant.setEmail("shop@demo.local");
+		merchant.setPhone("+380501112233");
+
+		refundService.create(merchant, PAYMENT_ID, new BigDecimal("10.00"), null, null);
+
+		ArgumentCaptor<RefundProcessedEvent> event = ArgumentCaptor.forClass(RefundProcessedEvent.class);
+		verify(eventPublisher).publishEvent(event.capture());
+		assertThat(event.getValue()).satisfies((published) -> {
+			assertThat(published.refundId()).isEqualTo(REFUND_ID);
+			assertThat(published.paymentId()).isEqualTo(PAYMENT_ID);
+			assertThat(published.merchantEmail()).isEqualTo("shop@demo.local");
+			assertThat(published.merchantPhone()).isEqualTo("+380501112233");
+			assertThat(published.amount()).isEqualTo(new BigDecimal("10.00"));
+			assertThat(published.currency()).isEqualTo("EUR");
+			assertThat(published.status()).isEqualTo(RefundStatus.SUCCEEDED);
+			assertThat(published.processedAt()).isNotNull();
+		});
+	}
+
+	@Test
+	void aPendingOrFailedOrIgnoredAnswerPublishesNothing() {
+		given(provider.refund(any())).willReturn(ProviderResult.pending("sim_r_p"));
+		refundService.create(merchant, PAYMENT_ID, new BigDecimal("1.00"), null, null);
+		given(provider.refund(any())).willThrow(new IllegalStateException("down"));
+		refundService.create(merchant, PAYMENT_ID, new BigDecimal("1.00"), null, null);
+
+		Refund settled = pendingRefund("acme_r_1");
+		settled.setStatus(RefundStatus.SUCCEEDED);
+		given(refundRepository.findLockedByProviderAndProviderReference("simulated", "acme_r_1"))
+			.willReturn(Optional.of(settled));
+		refundService.settleFromWebhook("simulated", ProviderWebhook.refund(null, ProviderResult.approved("acme_r_1")));
+
+		verifyNoInteractions(eventPublisher);
+	}
+
+	@Test
+	void aWebhookThatSettlesARefundPublishesItsEvent() {
+		Refund pending = pendingRefund("acme_r_1");
+		given(refundRepository.findLockedByProviderAndProviderReference("simulated", "acme_r_1"))
+			.willReturn(Optional.of(pending));
+
+		refundService.settleFromWebhook("simulated",
+				ProviderWebhook.refund(null, ProviderResult.declined("Card account closed", "acme_r_1")));
+
+		ArgumentCaptor<RefundProcessedEvent> event = ArgumentCaptor.forClass(RefundProcessedEvent.class);
+		verify(eventPublisher).publishEvent(event.capture());
+		assertThat(event.getValue().status()).isEqualTo(RefundStatus.DECLINED);
+		assertThat(event.getValue().declineReason()).isEqualTo("Card account closed");
 	}
 
 	private Refund pendingRefund(String reference) {

@@ -11,6 +11,7 @@ import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -24,6 +25,7 @@ import com.example.payment_service.entity.RefundStatus;
 import com.example.payment_service.entity.Transaction;
 import com.example.payment_service.entity.TransactionStatus;
 import com.example.payment_service.error.IdempotencyKeyReusedException;
+import com.example.payment_service.event.RefundProcessedEvent;
 import com.example.payment_service.error.PaymentNotFoundException;
 import com.example.payment_service.error.PaymentNotRefundableException;
 import com.example.payment_service.error.RefundExceedsRemainingException;
@@ -56,14 +58,17 @@ public class RefundService {
 
 	private final ReconciliationProperties reconciliation;
 
+	private final ApplicationEventPublisher eventPublisher;
+
 	public RefundService(TransactionRepository transactionRepository, RefundRepository refundRepository,
 			PaymentProviderRegistry providerRegistry, TransactionTemplate transactionTemplate,
-			ReconciliationProperties reconciliation) {
+			ReconciliationProperties reconciliation, ApplicationEventPublisher eventPublisher) {
 		this.transactionRepository = transactionRepository;
 		this.refundRepository = refundRepository;
 		this.providerRegistry = providerRegistry;
 		this.transactionTemplate = transactionTemplate;
 		this.reconciliation = reconciliation;
+		this.eventPublisher = eventPublisher;
 	}
 
 	public RefundOutcome create(Merchant merchant, UUID paymentId, BigDecimal amount, String reason,
@@ -217,6 +222,7 @@ public class RefundService {
 		}
 		refund.setProcessedAt(Instant.now().truncatedTo(ChronoUnit.MICROS));
 		refund.setNextCheckAt(null);
+		eventPublisher.publishEvent(RefundProcessedEvent.from(refund));
 	}
 
 	@Transactional(readOnly = true)

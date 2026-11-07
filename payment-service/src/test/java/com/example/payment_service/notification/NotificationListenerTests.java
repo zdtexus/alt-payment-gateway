@@ -12,8 +12,10 @@ import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.mail.MailSendException;
 
 import com.example.payment_service.entity.PaymentMethod;
+import com.example.payment_service.entity.RefundStatus;
 import com.example.payment_service.entity.TransactionStatus;
 import com.example.payment_service.event.PaymentProcessedEvent;
+import com.example.payment_service.event.RefundProcessedEvent;
 import com.example.payment_service.notification.email.EmailSender;
 import com.example.payment_service.notification.sms.SmsSender;
 
@@ -36,6 +38,50 @@ class NotificationListenerTests {
 	private final SmsSender smsSender = mock();
 
 	private final NotificationListener listener = new NotificationListener(emailSender, smsSender);
+
+	private static final UUID REFUND_ID = UUID.fromString("0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d");
+
+	@Test
+	void succeededRefundSendsReceiptByEmailAndSms() {
+		listener.onRefundProcessed(refund(RefundStatus.SUCCEEDED, null, "shop@example.com", "+380501234567"));
+
+		verify(emailSender).send("shop@example.com", "Refund " + REFUND_ID + " succeeded", """
+				Hello Demo Shop,
+
+				Refund %s of payment %s succeeded.
+
+				Amount: 10.00 EUR
+				Status: SUCCEEDED
+				Processed at: 2026-01-16T09:00:01Z
+				""".formatted(REFUND_ID, PAYMENT_ID));
+		verify(smsSender).send("+380501234567", "Refund 10.00 EUR succeeded");
+	}
+
+	@Test
+	void declinedRefundIncludesTheReasonAndOnlyUsesKnownContacts() {
+		listener.onRefundProcessed(refund(RefundStatus.DECLINED, "Card account closed", "shop@example.com", null));
+
+		verify(emailSender).send(org.mockito.ArgumentMatchers.eq("shop@example.com"),
+				org.mockito.ArgumentMatchers.eq("Refund " + REFUND_ID + " declined"),
+				org.mockito.ArgumentMatchers.contains("Reason: Card account closed\n"));
+		verifyNoInteractions(smsSender);
+	}
+
+	@Test
+	void aFailingRefundEmailStillSendsTheSmsAndIsLogged(CapturedOutput output) {
+		willThrow(new MailSendException("SMTP down")).given(emailSender).send(any(), any(), any());
+
+		assertThatNoException().isThrownBy(() -> listener
+			.onRefundProcessed(refund(RefundStatus.SUCCEEDED, null, "shop@example.com", "+380501234567")));
+
+		verify(smsSender).send("+380501234567", "Refund 10.00 EUR succeeded");
+		assertThat(output).contains("Failed to send email notification for refund " + REFUND_ID);
+	}
+
+	private static RefundProcessedEvent refund(RefundStatus status, String reason, String email, String phone) {
+		return new RefundProcessedEvent(REFUND_ID, PAYMENT_ID, "Demo Shop", email, phone, new BigDecimal("10.00"),
+				"EUR", status, reason, Instant.parse("2026-01-16T09:00:01Z"));
+	}
 
 	@Test
 	void succeededPaymentSendsReceiptByEmailAndSms() {
