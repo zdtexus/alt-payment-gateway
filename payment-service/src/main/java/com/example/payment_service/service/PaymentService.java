@@ -25,6 +25,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import com.example.payment_service.dto.CreatePaymentRequest;
 import com.example.payment_service.dto.PageResponse;
 import com.example.payment_service.dto.PaymentResponse;
+import com.example.payment_service.entity.CaptureMethod;
 import com.example.payment_service.entity.Merchant;
 import com.example.payment_service.entity.Transaction;
 import com.example.payment_service.entity.TransactionStatus;
@@ -32,6 +33,8 @@ import com.example.payment_service.error.IdempotencyKeyReusedException;
 import com.example.payment_service.error.PaymentNotFoundException;
 import com.example.payment_service.error.WebhookPaymentNotFoundException;
 import com.example.payment_service.event.PaymentProcessedEvent;
+import com.example.payment_service.provider.AuthorizationResult;
+import com.example.payment_service.provider.AuthorizingProvider;
 import com.example.payment_service.provider.PaymentProvider;
 import com.example.payment_service.provider.PaymentProviderRouter;
 import com.example.payment_service.provider.ProviderRequest;
@@ -126,16 +129,22 @@ public class PaymentService {
 		transaction.setAmount(request.amount().setScale(2));
 		transaction.setCurrency(request.currency());
 		transaction.setPaymentMethod(request.paymentMethod());
+		transaction.setCaptureMethod(request.captureMethod());
 		transaction.setStatus(TransactionStatus.PENDING);
 		Instant createdAt = Instant.now().truncatedTo(ChronoUnit.MICROS);
 		transaction.setCreatedAt(createdAt);
 		transaction.setNextCheckAt(createdAt.plus(reconciliation.minAge()));
 		PaymentProvider provider = providerRouter.providerFor(request.paymentMethod());
+		AuthorizingProvider authorizing = (request.captureMethod() == CaptureMethod.MANUAL)
+				? providerRouter.authorizingProviderFor(request.paymentMethod()) : null;
 		transaction.setProvider(provider.name());
-		return new PendingPayment(transactionRepository.saveAndFlush(transaction), provider);
+		return new PendingPayment(transactionRepository.saveAndFlush(transaction), provider, authorizing);
 	}
 
 	private PaymentOutcome callProvider(PendingPayment pending) {
+		if (pending.authorizing() != null) {
+			return callAuthorizingProvider(pending);
+		}
 		Transaction transaction = pending.transaction();
 		ProviderResult result;
 		try {
@@ -149,6 +158,41 @@ public class PaymentService {
 			return new PaymentOutcome(PaymentResponse.from(transaction, PaymentResponse.NOTHING_REFUNDED), false);
 		}
 		return transactionTemplate.execute((status) -> applyResult(transaction.getId(), result));
+	}
+
+	private PaymentOutcome callAuthorizingProvider(PendingPayment pending) {
+		Transaction transaction = pending.transaction();
+		AuthorizationResult authorization;
+		try {
+			authorization = pending.authorizing()
+				.authorize(new ProviderRequest(transaction.getId(), transaction.getPaymentMethod(),
+						transaction.getCurrency(), transaction.getAmount()));
+		}
+		catch (RuntimeException ex) {
+			log.error("Payment provider {} failed to authorize payment {}; the payment stays PENDING",
+					pending.provider().name(), transaction.getId(), ex);
+			return new PaymentOutcome(PaymentResponse.from(transaction, PaymentResponse.NOTHING_REFUNDED), false);
+		}
+		return transactionTemplate.execute((status) -> applyAuthorization(transaction.getId(), authorization));
+	}
+
+	private PaymentOutcome applyAuthorization(UUID paymentId, AuthorizationResult authorization) {
+		Transaction transaction = transactionRepository.findLockedById(paymentId).orElseThrow();
+		if (transaction.getStatus() != TransactionStatus.PENDING) {
+			log.warn("Payment {} was already {} when its provider answered the authorization; the answer is ignored",
+					paymentId, transaction.getStatus());
+		}
+		else if (authorization.result() instanceof ProviderResult.Approved(String reference)) {
+			transaction.setStatus(TransactionStatus.AUTHORIZED);
+			transaction.setProviderReference(reference);
+			transaction.setAuthorizedAmount(transaction.getAmount());
+			transaction.setAuthorizationExpiresAt(authorization.expiresAt().truncatedTo(ChronoUnit.MICROS));
+			transaction.setNextCheckAt(null);
+		}
+		else {
+			recordResult(transaction, authorization.result());
+		}
+		return new PaymentOutcome(PaymentResponse.from(transaction, PaymentResponse.NOTHING_REFUNDED), false);
 	}
 
 	private PaymentOutcome applyResult(UUID paymentId, ProviderResult result) {
@@ -203,6 +247,15 @@ public class PaymentService {
 	}
 
 	private void settle(Transaction transaction, ProviderResult result) {
+		if (transaction.getCaptureMethod() == CaptureMethod.MANUAL) {
+			log.warn("Payment {} uses manual capture; a payment result can't settle its authorization, so it stays {}",
+					transaction.getId(), transaction.getStatus());
+			return;
+		}
+		recordResult(transaction, result);
+	}
+
+	private void recordResult(Transaction transaction, ProviderResult result) {
 		switch (result) {
 			case ProviderResult.Approved(String reference) -> {
 				transaction.setStatus(TransactionStatus.SUCCEEDED);
@@ -256,7 +309,7 @@ public class PaymentService {
 			.collect(Collectors.toMap(RefundTotal::getPaymentId, (total) -> total.getAmount().setScale(2)));
 	}
 
-	private record PendingPayment(Transaction transaction, PaymentProvider provider) {
+	private record PendingPayment(Transaction transaction, PaymentProvider provider, AuthorizingProvider authorizing) {
 	}
 
 }

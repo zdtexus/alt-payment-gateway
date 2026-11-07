@@ -13,6 +13,7 @@ import org.springframework.boot.test.json.JacksonTester;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 
+import com.example.payment_service.entity.CaptureMethod;
 import com.example.payment_service.entity.PaymentMethod;
 import com.example.payment_service.entity.Transaction;
 import com.example.payment_service.entity.TransactionStatus;
@@ -38,6 +39,45 @@ class PaymentDtoJsonTests {
 		assertThat(request.amount()).isEqualByComparingTo("49.90");
 		assertThat(request.currency()).isEqualTo("EUR");
 		assertThat(request.paymentMethod()).isEqualTo(PaymentMethod.CARD);
+		assertThat(request.captureMethod()).isEqualTo(CaptureMethod.AUTOMATIC);
+	}
+
+	@Test
+	void readsTheCaptureMethod() throws Exception {
+		assertThat(requestJson.parseObject(
+				"{\"amount\": 49.90, \"currency\": \"EUR\", \"paymentMethod\": \"CARD\", \"captureMethod\": \"MANUAL\"}")
+			.captureMethod()).isEqualTo(CaptureMethod.MANUAL);
+		assertThat(requestJson.parseObject(
+				"{\"amount\": 49.90, \"currency\": \"EUR\", \"paymentMethod\": \"CARD\", \"captureMethod\": null}")
+			.captureMethod()).isEqualTo(CaptureMethod.AUTOMATIC);
+	}
+
+	@Test
+	void writesAnAuthorizedPaymentWithItsExpiry() throws Exception {
+		Transaction transaction = declinedTransaction();
+		transaction.setStatus(TransactionStatus.AUTHORIZED);
+		transaction.setDeclineReason(null);
+		transaction.setProcessedAt(null);
+		transaction.setCaptureMethod(CaptureMethod.MANUAL);
+		transaction.setAuthorizedAmount(new BigDecimal("600.00"));
+		transaction.setAuthorizationExpiresAt(Instant.parse("2026-01-22T10:30:00Z"));
+
+		assertThat(responseJson.write(PaymentResponse.from(transaction, PaymentResponse.NOTHING_REFUNDED)))
+			.isStrictlyEqualToJson("""
+					{
+					  "id": "7f8e2a1c-4b3d-4e5f-9a6b-1c2d3e4f5a6b",
+					  "amount": 600.00,
+					  "refundedAmount": 0.00,
+					  "currency": "EUR",
+					  "paymentMethod": "CARD",
+					  "captureMethod": "MANUAL",
+					  "status": "AUTHORIZED",
+					  "declineReason": null,
+					  "createdAt": "2026-01-15T10:30:00Z",
+					  "processedAt": null,
+					  "authorizationExpiresAt": "2026-01-22T10:30:00Z"
+					}
+					""");
 	}
 
 	@Test
@@ -51,10 +91,12 @@ class PaymentDtoJsonTests {
 				  "refundedAmount": 0.00,
 				  "currency": "EUR",
 				  "paymentMethod": "CARD",
+				  "captureMethod": "AUTOMATIC",
 				  "status": "DECLINED",
 				  "declineReason": "Insufficient funds",
 				  "createdAt": "2026-01-15T10:30:00Z",
-				  "processedAt": "2026-01-15T10:30:01Z"
+				  "processedAt": "2026-01-15T10:30:01Z",
+				  "authorizationExpiresAt": null
 				}
 				""");
 	}

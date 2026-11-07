@@ -8,6 +8,7 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Positive;
 
+import com.example.payment_service.entity.CaptureMethod;
 import com.example.payment_service.entity.PaymentMethod;
 
 public record CreatePaymentRequest(
@@ -16,5 +17,19 @@ public record CreatePaymentRequest(
 		@Schema(description = "ISO 4217 currency code; allowed currencies depend on the payment method",
 				example = "EUR") @NotNull @Pattern(regexp = "[A-Z]{3}",
 						message = "must be a 3-letter ISO currency code") String currency,
-		@Schema(example = "CARD") @NotNull PaymentMethod paymentMethod) {
+		@Schema(example = "CARD") @NotNull PaymentMethod paymentMethod,
+		@Schema(description = "AUTOMATIC (default) charges the amount at once; MANUAL only reserves it: "
+				+ "the payment becomes AUTHORIZED and is charged when it is captured", example = "AUTOMATIC",
+				defaultValue = "AUTOMATIC") CaptureMethod captureMethod) {
+
+	public CreatePaymentRequest {
+		if (captureMethod == null) {
+			captureMethod = CaptureMethod.AUTOMATIC;
+		}
+	}
+
+	public CreatePaymentRequest(BigDecimal amount, String currency, PaymentMethod paymentMethod) {
+		this(amount, currency, paymentMethod, CaptureMethod.AUTOMATIC);
+	}
+
 }

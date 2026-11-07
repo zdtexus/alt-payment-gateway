@@ -102,8 +102,8 @@ class OpenApiDocsTests {
 		mvc.perform(get("/v3/api-docs"))
 			.andExpect(status().isOk())
 			.andExpect(jsonPath("$.components.schemas.PaymentResponse.properties.keys()",
-					containsInAnyOrder("id", "amount", "refundedAmount", "currency", "paymentMethod", "status",
-							"declineReason", "createdAt", "processedAt")))
+					containsInAnyOrder("id", "amount", "refundedAmount", "currency", "paymentMethod", "captureMethod",
+							"status", "declineReason", "createdAt", "processedAt", "authorizationExpiresAt")))
 			.andExpect(jsonPath("$..provider").isEmpty())
 			.andExpect(jsonPath("$..providerReference").isEmpty());
 	}

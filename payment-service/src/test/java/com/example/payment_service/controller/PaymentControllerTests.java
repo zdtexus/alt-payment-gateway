@@ -21,11 +21,13 @@ import com.example.payment_service.auth.ApiKeyHasher;
 import com.example.payment_service.dto.CreatePaymentRequest;
 import com.example.payment_service.dto.PageResponse;
 import com.example.payment_service.dto.PaymentResponse;
+import com.example.payment_service.entity.CaptureMethod;
 import com.example.payment_service.entity.Merchant;
 import com.example.payment_service.entity.MerchantStatus;
 import com.example.payment_service.entity.PaymentMethod;
 import com.example.payment_service.entity.TransactionStatus;
 import com.example.payment_service.error.IdempotencyKeyReusedException;
+import com.example.payment_service.error.ManualCaptureNotSupportedException;
 import com.example.payment_service.error.PaymentNotFoundException;
 import com.example.payment_service.error.PaymentRuleViolationException;
 import com.example.payment_service.repository.MerchantRepository;
@@ -170,6 +172,49 @@ class PaymentControllerTests {
 	}
 
 	@Test
+	void manualCaptureIsPassedToTheServiceAndTheAuthorizationIsShown() throws Exception {
+		CreatePaymentRequest manual = new CreatePaymentRequest(new BigDecimal("49.90"), "EUR", PaymentMethod.CARD,
+				CaptureMethod.MANUAL);
+		PaymentResponse authorized = new PaymentResponse(PAYMENT_ID, new BigDecimal("49.90"), new BigDecimal("0.00"),
+				"EUR", PaymentMethod.CARD, CaptureMethod.MANUAL, TransactionStatus.AUTHORIZED, null,
+				Instant.parse("2026-01-15T10:30:00Z"), null, Instant.parse("2026-01-22T10:30:00Z"));
+		given(paymentService.process(same(merchant), eq(manual), isNull()))
+			.willReturn(new PaymentOutcome(authorized, false));
+
+		mvc.perform(post("/api/v1/payments").header("X-API-Key", API_KEY)
+			.contentType(MediaType.APPLICATION_JSON)
+			.content("{\"amount\": 49.90, \"currency\": \"EUR\", \"paymentMethod\": \"CARD\", \"captureMethod\": \"MANUAL\"}"))
+			.andExpect(status().isCreated())
+			.andExpect(jsonPath("$.status").value("AUTHORIZED"))
+			.andExpect(jsonPath("$.captureMethod").value("MANUAL"))
+			.andExpect(jsonPath("$.authorizationExpiresAt").value("2026-01-22T10:30:00Z"))
+			.andExpect(jsonPath("$.processedAt").isEmpty());
+	}
+
+	@Test
+	void unknownCaptureMethodReturns400WithoutProcessing() throws Exception {
+		mvc.perform(post("/api/v1/payments").header("X-API-Key", API_KEY)
+			.contentType(MediaType.APPLICATION_JSON)
+			.content("{\"amount\": 49.90, \"currency\": \"EUR\", \"paymentMethod\": \"CARD\", \"captureMethod\": \"LATER\"}"))
+			.andExpect(status().isBadRequest())
+			.andExpect(jsonPath("$.error").value("VALIDATION_FAILED"));
+		verifyNoInteractions(paymentService);
+	}
+
+	@Test
+	void manualCaptureThatIsNotSupportedReturns422() throws Exception {
+		given(paymentService.process(same(merchant), any(), isNull()))
+			.willThrow(new ManualCaptureNotSupportedException(PaymentMethod.KVIK));
+
+		mvc.perform(post("/api/v1/payments").header("X-API-Key", API_KEY)
+			.contentType(MediaType.APPLICATION_JSON)
+			.content("{\"amount\": 49.90, \"currency\": \"EUR\", \"paymentMethod\": \"KVIK\", \"captureMethod\": \"MANUAL\"}"))
+			.andExpect(status().isUnprocessableContent())
+			.andExpect(jsonPath("$.error").value("MANUAL_CAPTURE_NOT_SUPPORTED"))
+			.andExpect(jsonPath("$.message").value("Manual capture is not supported for KVIK payments"));
+	}
+
+	@Test
 	void invalidBodyReturns400WithoutProcessing() throws Exception {
 		mvc.perform(post("/api/v1/payments").header("X-API-Key", API_KEY)
 			.contentType(MediaType.APPLICATION_JSON)
@@ -261,8 +306,8 @@ class PaymentControllerTests {
 
 	private static PaymentResponse payment(TransactionStatus status, String declineReason) {
 		return new PaymentResponse(PAYMENT_ID, new BigDecimal("49.90"), new BigDecimal("0.00"), "EUR",
-				PaymentMethod.CARD, status,
-				declineReason, Instant.parse("2026-01-15T10:30:00Z"), Instant.parse("2026-01-15T10:30:01Z"));
+				PaymentMethod.CARD, CaptureMethod.AUTOMATIC, status, declineReason, Instant.parse("2026-01-15T10:30:00Z"),
+				Instant.parse("2026-01-15T10:30:01Z"), null);
 	}
 
 }

@@ -27,14 +27,18 @@ import org.springframework.transaction.support.TransactionTemplate;
 import com.example.payment_service.dto.CreatePaymentRequest;
 import com.example.payment_service.dto.PageResponse;
 import com.example.payment_service.dto.PaymentResponse;
+import com.example.payment_service.entity.CaptureMethod;
 import com.example.payment_service.entity.Merchant;
 import com.example.payment_service.entity.PaymentMethod;
 import com.example.payment_service.entity.Transaction;
 import com.example.payment_service.entity.TransactionStatus;
+import com.example.payment_service.error.ManualCaptureNotSupportedException;
 import com.example.payment_service.error.PaymentNotFoundException;
 import com.example.payment_service.error.PaymentRuleViolationException;
 import com.example.payment_service.error.WebhookPaymentNotFoundException;
 import com.example.payment_service.event.PaymentProcessedEvent;
+import com.example.payment_service.provider.AuthorizationResult;
+import com.example.payment_service.provider.AuthorizingProvider;
 import com.example.payment_service.provider.PaymentProvider;
 import com.example.payment_service.provider.PaymentProviderRouter;
 import com.example.payment_service.provider.ProviderRequest;
@@ -75,6 +79,13 @@ class PaymentServiceTests {
 
 	private final PaymentProvider paymentProvider = mock();
 
+	private final AuthorizingProvider authorizingProvider = mock();
+
+	private static final CreatePaymentRequest MANUAL_REQUEST = new CreatePaymentRequest(new BigDecimal("49.90"), "EUR",
+			PaymentMethod.CARD, CaptureMethod.MANUAL);
+
+	private static final Instant EXPIRES = Instant.parse("2026-01-22T10:30:00.123456789Z");
+
 	private final PaymentProviderRouter providerRouter = mock();
 
 	private final ApplicationEventPublisher eventPublisher = mock();
@@ -108,6 +119,7 @@ class PaymentServiceTests {
 	@BeforeEach
 	void assignIdOnSave() {
 		given(providerRouter.providerFor(any())).willReturn(paymentProvider);
+		given(providerRouter.authorizingProviderFor(any())).willReturn(authorizingProvider);
 		given(paymentProvider.name()).willReturn("simulated");
 		given(transactionRepository.saveAndFlush(any())).willAnswer((invocation) -> {
 			Transaction transaction = invocation.getArgument(0);
@@ -160,6 +172,133 @@ class PaymentServiceTests {
 		assertThat(saved.getStatus()).isEqualTo(TransactionStatus.PENDING);
 		assertThat(saved.getProviderReference()).isEqualTo("ref-789");
 		assertThat(saved.getProcessedAt()).isNull();
+		verifyNoInteractions(eventPublisher);
+	}
+
+	@Test
+	void manualPaymentIsAuthorizedWithoutAReceipt() {
+		given(authorizingProvider.authorize(any())).willReturn(AuthorizationResult.approved("auth_1", EXPIRES));
+
+		PaymentResponse response = paymentService.process(merchant, MANUAL_REQUEST);
+
+		assertThat(response.status()).isEqualTo(TransactionStatus.AUTHORIZED);
+		assertThat(response.captureMethod()).isEqualTo(CaptureMethod.MANUAL);
+		assertThat(response.authorizationExpiresAt()).isEqualTo(Instant.parse("2026-01-22T10:30:00.123456Z"));
+		assertThat(response.processedAt()).isNull();
+		assertThat(statusWhenSaved.get()).isEqualTo(TransactionStatus.PENDING);
+		Transaction saved = savedTransaction();
+		assertThat(saved.getCaptureMethod()).isEqualTo(CaptureMethod.MANUAL);
+		assertThat(saved.getAuthorizedAmount()).isEqualByComparingTo("49.90");
+		assertThat(saved.getCapturedAmount()).isNull();
+		assertThat(saved.getProviderReference()).isEqualTo("auth_1");
+		assertThat(saved.getNextCheckAt()).isNull();
+		verify(authorizingProvider)
+			.authorize(new ProviderRequest(PAYMENT_ID, PaymentMethod.CARD, "EUR", new BigDecimal("49.90")));
+		verify(paymentProvider, never()).process(any());
+		verifyNoInteractions(eventPublisher);
+	}
+
+	@Test
+	void manualPaymentDeclinedOnAuthorizationIsFinalWithAReceipt() {
+		given(authorizingProvider.authorize(any()))
+			.willReturn(AuthorizationResult.declined("Insufficient funds", "auth_1"));
+
+		PaymentResponse response = paymentService.process(merchant, MANUAL_REQUEST);
+
+		assertThat(response.status()).isEqualTo(TransactionStatus.DECLINED);
+		assertThat(response.declineReason()).isEqualTo("Insufficient funds");
+		assertThat(response.processedAt()).isNotNull();
+		assertThat(response.authorizationExpiresAt()).isNull();
+		Transaction saved = savedTransaction();
+		assertThat(saved.getAuthorizedAmount()).isNull();
+		assertThat(saved.getNextCheckAt()).isNull();
+		verify(eventPublisher).publishEvent(any(PaymentProcessedEvent.class));
+	}
+
+	@Test
+	void pendingAuthorizationStaysPendingWithItsReferenceAndNextCheck() {
+		given(authorizingProvider.authorize(any())).willReturn(AuthorizationResult.pending("auth_1"));
+
+		PaymentResponse response = paymentService.process(merchant, MANUAL_REQUEST);
+
+		assertThat(response.status()).isEqualTo(TransactionStatus.PENDING);
+		Transaction saved = savedTransaction();
+		assertThat(saved.getProviderReference()).isEqualTo("auth_1");
+		assertThat(saved.getAuthorizedAmount()).isNull();
+		assertThat(saved.getNextCheckAt()).isEqualTo(saved.getCreatedAt().plus(MIN_AGE));
+		verifyNoInteractions(eventPublisher);
+	}
+
+	@Test
+	void authorizationFailureLeavesThePaymentPending() {
+		given(authorizingProvider.authorize(any())).willThrow(new IllegalStateException("Provider unreachable"));
+
+		PaymentResponse response = paymentService.process(merchant, MANUAL_REQUEST);
+
+		assertThat(response.status()).isEqualTo(TransactionStatus.PENDING);
+		assertThat(response.captureMethod()).isEqualTo(CaptureMethod.MANUAL);
+		verify(transactionManager, times(1)).commit(any());
+		verify(transactionRepository, never()).findLockedById(any());
+		verifyNoInteractions(eventPublisher);
+	}
+
+	@Test
+	void manualCaptureWithoutAnAuthorizingProviderStopsBeforeSaving() {
+		given(providerRouter.authorizingProviderFor(PaymentMethod.CARD))
+			.willThrow(new ManualCaptureNotSupportedException(PaymentMethod.CARD));
+
+		assertThatExceptionOfType(ManualCaptureNotSupportedException.class)
+			.isThrownBy(() -> paymentService.process(merchant, MANUAL_REQUEST));
+
+		verify(transactionRepository, never()).saveAndFlush(any());
+		verify(paymentProvider, never()).process(any());
+		verifyNoInteractions(authorizingProvider, eventPublisher);
+	}
+
+	@Test
+	void automaticPaymentNeverAsksForAnAuthorization() {
+		given(paymentProvider.process(any())).willReturn(ProviderResult.approved());
+
+		PaymentResponse response = paymentService.process(merchant, REQUEST);
+
+		assertThat(response.captureMethod()).isEqualTo(CaptureMethod.AUTOMATIC);
+		assertThat(response.authorizationExpiresAt()).isNull();
+		assertThat(savedTransaction().getCaptureMethod()).isEqualTo(CaptureMethod.AUTOMATIC);
+		assertThat(savedTransaction().getAuthorizedAmount()).isNull();
+		verify(providerRouter, never()).authorizingProviderFor(any());
+		verifyNoInteractions(authorizingProvider);
+	}
+
+	@Test
+	void authorizationAnswerDoesNotOverwritePaymentSettledMeanwhile() {
+		given(authorizingProvider.authorize(any())).willAnswer((invocation) -> {
+			savedTransaction().setStatus(TransactionStatus.DECLINED);
+			return AuthorizationResult.approved("auth_1", EXPIRES);
+		});
+
+		PaymentResponse response = paymentService.process(merchant, MANUAL_REQUEST);
+
+		assertThat(response.status()).isEqualTo(TransactionStatus.DECLINED);
+		assertThat(savedTransaction().getAuthorizedAmount()).isNull();
+		assertThat(savedTransaction().getProviderReference()).isNull();
+		verifyNoInteractions(eventPublisher);
+	}
+
+	@Test
+	void aPaymentResultCannotSettleAManualPayment() {
+		Transaction manual = pendingTransaction("auth_1");
+		manual.setCaptureMethod(CaptureMethod.MANUAL);
+		given(transactionRepository.findLockedByProviderAndProviderReference("http", "auth_1"))
+			.willReturn(Optional.of(manual));
+		given(transactionRepository.findLockedById(PAYMENT_ID)).willReturn(Optional.of(manual));
+
+		paymentService.settleFromWebhook("http", new ProviderWebhook(null, ProviderResult.approved("auth_1")));
+		TransactionStatus afterCheck = paymentService.settleFromStatusCheck(PAYMENT_ID,
+				ProviderResult.declined("Expired", "auth_1"));
+
+		assertThat(manual.getStatus()).isEqualTo(TransactionStatus.PENDING);
+		assertThat(afterCheck).isEqualTo(TransactionStatus.PENDING);
+		assertThat(manual.getProcessedAt()).isNull();
 		verifyNoInteractions(eventPublisher);
 	}
 
