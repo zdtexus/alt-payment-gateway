@@ -94,6 +94,12 @@ public class GlobalExceptionHandler {
 		return error(HttpStatus.UNPROCESSABLE_CONTENT, "PAYMENT_RULE_VIOLATION", ex.getMessage(), request);
 	}
 
+	@ExceptionHandler(RefundNotSupportedException.class)
+	ResponseEntity<ErrorResponse> handleRefundNotSupported(RefundNotSupportedException ex,
+			HttpServletRequest request) {
+		return error(HttpStatus.UNPROCESSABLE_CONTENT, "REFUND_NOT_SUPPORTED", ex.getMessage(), request);
+	}
+
 	@ExceptionHandler(IdempotencyKeyReusedException.class)
 	ResponseEntity<ErrorResponse> handleIdempotencyKeyReused(IdempotencyKeyReusedException ex,
 			HttpServletRequest request) {

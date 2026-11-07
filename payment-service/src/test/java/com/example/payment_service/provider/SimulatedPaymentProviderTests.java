@@ -50,6 +50,47 @@ class SimulatedPaymentProviderTests {
 		assertThat(references).hasSize(100).allMatch((reference) -> reference.matches("sim_[0-9a-f-]{36}"));
 	}
 
+	private static final RefundRequest REFUND = new RefundRequest(UUID.randomUUID(), UUID.randomUUID(), "sim_1", "EUR",
+			new BigDecimal("4.00"));
+
+	@RepeatedTest(20)
+	void fullSuccessRateAlwaysApprovesRefunds() {
+		assertThat(provider(1.0, Duration.ZERO).refund(REFUND)).isInstanceOfSatisfying(ProviderResult.Approved.class,
+				(approved) -> assertThat(approved.reference()).matches("sim_r_[0-9a-f-]{36}"));
+	}
+
+	@RepeatedTest(20)
+	void zeroSuccessRateAlwaysDeclinesRefundsWithARefundReason() {
+		assertThat(provider(0.0, Duration.ZERO).refund(REFUND)).isInstanceOfSatisfying(ProviderResult.Declined.class,
+				(declined) -> {
+					assertThat(declined.reason()).isIn("Card account closed", "Refund window expired");
+					assertThat(declined.reference()).matches("sim_r_[0-9a-f-]{36}");
+				});
+	}
+
+	@Test
+	void everyRefundHasItsOwnReferenceAndRefundsAreSupported() {
+		SimulatedPaymentProvider provider = provider(0.5, Duration.ZERO);
+
+		Set<String> references = new HashSet<>();
+		for (int i = 0; i < 50; i++) {
+			references.add(provider.refund(REFUND).reference());
+		}
+
+		assertThat(references).hasSize(50).allMatch((reference) -> reference.startsWith("sim_r_"));
+		assertThat(provider.supportsRefunds()).isTrue();
+	}
+
+	@Test
+	void refundsWaitForTheConfiguredLatencyToo() {
+		SimulatedPaymentProvider provider = provider(1.0, Duration.ofMillis(100));
+
+		long start = System.nanoTime();
+		provider.refund(REFUND);
+
+		assertThat(Duration.ofNanos(System.nanoTime() - start)).isGreaterThanOrEqualTo(Duration.ofMillis(100));
+	}
+
 	@Test
 	void isNamedSimulated() {
 		assertThat(provider(1.0, Duration.ZERO).name()).isEqualTo("simulated");

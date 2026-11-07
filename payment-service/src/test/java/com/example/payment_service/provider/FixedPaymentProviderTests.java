@@ -53,6 +53,34 @@ class FixedPaymentProviderTests {
 		assertThat(references).hasSize(100).allMatch((reference) -> reference.matches("fix_[0-9a-f-]{36}"));
 	}
 
+	private static final RefundRequest REFUND = new RefundRequest(UUID.randomUUID(), UUID.randomUUID(), null, "EUR",
+			new BigDecimal("4.00"));
+
+	@Test
+	void refundsFollowTheConfiguredOutcome() {
+		assertThat(provider(Outcome.APPROVE, "unused").refund(REFUND)).isInstanceOfSatisfying(
+				ProviderResult.Approved.class,
+				(approved) -> assertThat(approved.reference()).matches("fix_r_[0-9a-f-]{36}"));
+		assertThat(provider(Outcome.DECLINE, "Refunds are paused").refund(REFUND)).isInstanceOfSatisfying(
+				ProviderResult.Declined.class, (declined) -> {
+					assertThat(declined.reason()).isEqualTo("Refunds are paused");
+					assertThat(declined.reference()).matches("fix_r_[0-9a-f-]{36}");
+				});
+	}
+
+	@Test
+	void everyRefundHasItsOwnReferenceAndRefundsAreSupported() {
+		FixedPaymentProvider provider = provider(Outcome.APPROVE, "unused");
+
+		Set<String> references = new HashSet<>();
+		for (int i = 0; i < 20; i++) {
+			references.add(provider.refund(REFUND).reference());
+		}
+
+		assertThat(references).hasSize(20);
+		assertThat(provider.supportsRefunds()).isTrue();
+	}
+
 	@Test
 	void isNamedFixed() {
 		assertThat(provider(Outcome.APPROVE, "unused").name()).isEqualTo("fixed");

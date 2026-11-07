@@ -42,6 +42,12 @@ public class PaymentProviderRegistry {
 			.filter(WebhookProvider::acceptsWebhooks);
 	}
 
+	public Optional<RefundingProvider> findRefundingProvider(String name) {
+		return find(name).filter(RefundingProvider.class::isInstance)
+			.map(RefundingProvider.class::cast)
+			.filter(RefundingProvider::supportsRefunds);
+	}
+
 	public Map<String, StatusCheckingProvider> statusCheckingProviders() {
 		Map<String, StatusCheckingProvider> checking = new TreeMap<>();
 		providers.forEach((name, provider) -> {

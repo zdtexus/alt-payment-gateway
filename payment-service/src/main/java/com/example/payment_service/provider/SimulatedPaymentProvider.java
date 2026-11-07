@@ -7,14 +7,19 @@ import java.util.concurrent.ThreadLocalRandom;
 import org.springframework.stereotype.Component;
 
 @Component
-public class SimulatedPaymentProvider implements PaymentProvider {
+public class SimulatedPaymentProvider implements PaymentProvider, RefundingProvider {
 
 	public static final String NAME = "simulated";
 
 	static final String REFERENCE_PREFIX = "sim_";
 
+	static final String REFUND_REFERENCE_PREFIX = "sim_r_";
+
 	private static final List<String> DECLINE_REASONS = List.of("Insufficient funds", "Suspected fraud",
 			"Limit exceeded");
+
+	private static final List<String> REFUND_DECLINE_REASONS = List.of("Card account closed",
+			"Refund window expired");
 
 	private final SimulatedPaymentProviderProperties properties;
 
@@ -36,6 +41,23 @@ public class SimulatedPaymentProvider implements PaymentProvider {
 			return ProviderResult.approved(reference);
 		}
 		return ProviderResult.declined(DECLINE_REASONS.get(random.nextInt(DECLINE_REASONS.size())), reference);
+	}
+
+	@Override
+	public boolean supportsRefunds() {
+		return true;
+	}
+
+	@Override
+	public ProviderResult refund(RefundRequest request) {
+		simulateLatency();
+		ThreadLocalRandom random = ThreadLocalRandom.current();
+		String reference = REFUND_REFERENCE_PREFIX + UUID.randomUUID();
+		if (random.nextDouble() < properties.successRate()) {
+			return ProviderResult.approved(reference);
+		}
+		return ProviderResult.declined(REFUND_DECLINE_REASONS.get(random.nextInt(REFUND_DECLINE_REASONS.size())),
+				reference);
 	}
 
 	private void simulateLatency() {

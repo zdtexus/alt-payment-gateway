@@ -145,6 +145,14 @@ class GlobalExceptionHandlerTests {
 	}
 
 	@Test
+	void refundOfAProviderWithoutRefundsReturns422WithoutNamingTheProvider() throws Exception {
+		ResultActions result = mvc.perform(get("/test/refund-not-supported"));
+
+		expectError(result, 422, "REFUND_NOT_SUPPORTED", "This payment can't be refunded through its payment provider",
+				"/test/refund-not-supported");
+	}
+
+	@Test
 	void reusedIdempotencyKeyReturns422() throws Exception {
 		ResultActions result = mvc.perform(get("/test/idempotency-key-reused"));
 
@@ -300,6 +308,11 @@ class GlobalExceptionHandlerTests {
 						new SQLException("duplicate key value violates unique constraint", "23505"));
 				default -> new CannotCreateTransactionException("Could not open JPA EntityManager " + DATABASE_DETAIL);
 			};
+		}
+
+		@GetMapping("/test/refund-not-supported")
+		void refundNotSupported() {
+			throw new RefundNotSupportedException();
 		}
 
 		@GetMapping("/test/idempotency-key-reused")
