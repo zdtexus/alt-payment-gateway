@@ -21,6 +21,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.web.client.ResourceAccessException;
+import org.springframework.web.client.RestClientResponseException;
 
 import com.example.payment_service.entity.PaymentMethod;
 import com.example.payment_service.error.InvalidWebhookException;
@@ -54,6 +55,12 @@ class HttpPaymentProviderTests {
 
 	private final AtomicReference<String> body = new AtomicReference<>();
 
+	private final AtomicReference<String> statusPath = new AtomicReference<>();
+
+	private final AtomicReference<String> statusQuery = new AtomicReference<>();
+
+	private final AtomicReference<String> statusAccept = new AtomicReference<>();
+
 	private volatile int responseStatus = 200;
 
 	private volatile String responseBody = """
@@ -80,6 +87,25 @@ class HttpPaymentProviderTests {
 			byte[] bytes = responseBody.getBytes(StandardCharsets.UTF_8);
 			exchange.getResponseHeaders().set("Content-Type", "application/json");
 			exchange.sendResponseHeaders(responseStatus, bytes.length);
+			try (OutputStream out = exchange.getResponseBody()) {
+				out.write(bytes);
+			}
+		});
+		server.createContext("/status", (exchange) -> {
+			method.set(exchange.getRequestMethod());
+			authorization.set(exchange.getRequestHeaders().getFirst("Authorization"));
+			statusPath.set(exchange.getRequestURI().getRawPath());
+			statusQuery.set(exchange.getRequestURI().getRawQuery());
+			statusAccept.set(exchange.getRequestHeaders().getFirst("Accept"));
+			try {
+				Thread.sleep(responseDelay);
+			}
+			catch (InterruptedException ex) {
+				Thread.currentThread().interrupt();
+			}
+			byte[] bytes = responseBody.getBytes(StandardCharsets.UTF_8);
+			exchange.getResponseHeaders().set("Content-Type", "application/json");
+			exchange.sendResponseHeaders(responseStatus, (bytes.length == 0) ? -1 : bytes.length);
 			try (OutputStream out = exchange.getResponseBody()) {
 				out.write(bytes);
 			}
@@ -198,7 +224,7 @@ class HttpPaymentProviderTests {
 		}
 		HttpPaymentProvider provider = new HttpPaymentProvider(new HttpPaymentProviderProperties(
 				URI.create("http://localhost:" + closedPort + "/pay"), null, Duration.ofSeconds(1),
-				Duration.ofSeconds(1), null));
+				Duration.ofSeconds(1), null, null));
 
 		assertThatExceptionOfType(ResourceAccessException.class).isThrownBy(() -> provider.process(REQUEST));
 	}
@@ -206,7 +232,7 @@ class HttpPaymentProviderTests {
 	@Test
 	void usesConfiguredConnectTimeout() {
 		HttpPaymentProviderProperties properties = new HttpPaymentProviderProperties(URI.create("http://localhost"),
-				null, Duration.ofMillis(750), Duration.ofSeconds(10), null);
+				null, Duration.ofMillis(750), Duration.ofSeconds(10), null, null);
 
 		assertThat(HttpPaymentProvider.httpClient(properties).connectTimeout()).hasValue(Duration.ofMillis(750));
 	}
@@ -292,10 +318,109 @@ class HttpPaymentProviderTests {
 			.isThrownBy(() -> webhookProvider().readWebhook(body, HttpPaymentProvider.sign(WEBHOOK_SECRET, body)));
 	}
 
+	@Test
+	void statusQueryIsAGetWithPaymentIdReferenceAndBearerKey() {
+		statusProvider("secret", Duration.ofSeconds(5))
+			.checkStatus(new ProviderStatusRequest(PAYMENT_ID, "acme_1"));
+
+		assertThat(method).hasValue("GET");
+		assertThat(statusPath).hasValue("/status");
+		assertThat(statusQuery).hasValue("paymentId=" + PAYMENT_ID + "&reference=acme_1");
+		assertThat(authorization).hasValue("Bearer secret");
+		assertThat(statusAccept.get()).contains("application/json");
+	}
+
+	@Test
+	void statusQueryWithoutReferenceSendsOnlyThePaymentId() {
+		statusProvider(null, Duration.ofSeconds(5)).checkStatus(new ProviderStatusRequest(PAYMENT_ID, null));
+
+		assertThat(statusQuery).hasValue("paymentId=" + PAYMENT_ID);
+		assertThat(authorization).hasValue(null);
+	}
+
+	@Test
+	void statusQueryEncodesTheReferenceAndKeepsTheUrlsOwnQuery() {
+		URI url = URI.create("http://localhost:" + server.getAddress().getPort() + "/pay");
+		URI status = URI.create("http://localhost:" + server.getAddress().getPort() + "/status?merchant=demo");
+		new HttpPaymentProvider(new HttpPaymentProviderProperties(url, null, Duration.ofSeconds(2),
+				Duration.ofSeconds(5), null, status))
+			.checkStatus(new ProviderStatusRequest(PAYMENT_ID, "ref with space&more"));
+
+		assertThat(statusQuery).hasValue("merchant=demo&paymentId=" + PAYMENT_ID + "&reference=ref%20with%20space%26more");
+	}
+
+	@Test
+	void statusAnswersUseThePaymentAnswerFormat() {
+		HttpPaymentProvider provider = statusProvider("secret", Duration.ofSeconds(5));
+		ProviderStatusRequest request = new ProviderStatusRequest(PAYMENT_ID, "acme_1");
+
+		assertThat(provider.checkStatus(request)).isEqualTo(ProviderResult.approved("acme_1"));
+		responseBody = """
+				{"status":"DECLINED","reference":"acme_1","reason":"Card expired"}""";
+		assertThat(provider.checkStatus(request)).isEqualTo(ProviderResult.declined("Card expired", "acme_1"));
+		responseBody = """
+				{"status":"PENDING","reference":"acme_1"}""";
+		assertThat(provider.checkStatus(request)).isEqualTo(ProviderResult.pending("acme_1"));
+	}
+
+	@ParameterizedTest
+	@ValueSource(strings = { "{\"status\":\"MAYBE\"}", "{}", "{\"status\":\"DECLINED\"}", "" })
+	void untrustedStatusAnswerIsThrown(String answer) {
+		responseBody = answer;
+
+		assertThatExceptionOfType(RuntimeException.class).isThrownBy(() -> statusProvider("secret", Duration.ofSeconds(5))
+			.checkStatus(new ProviderStatusRequest(PAYMENT_ID, "acme_1")));
+	}
+
+	@ParameterizedTest
+	@ValueSource(ints = { 404, 500, 503 })
+	void statusErrorIsThrown(int status) {
+		responseStatus = status;
+
+		assertThatExceptionOfType(RestClientResponseException.class).isThrownBy(() -> statusProvider("secret",
+				Duration.ofSeconds(5)).checkStatus(new ProviderStatusRequest(PAYMENT_ID, "acme_1")));
+	}
+
+	@Test
+	void slowStatusAnswerTimesOutAfterReadTimeout() {
+		responseDelay = Duration.ofSeconds(3);
+
+		long start = System.nanoTime();
+		assertThatExceptionOfType(ResourceAccessException.class).isThrownBy(() -> statusProvider("secret",
+				Duration.ofMillis(200)).checkStatus(new ProviderStatusRequest(PAYMENT_ID, "acme_1")));
+
+		assertThat(Duration.ofNanos(System.nanoTime() - start)).isLessThan(Duration.ofSeconds(2));
+	}
+
+	@Test
+	void withoutStatusUrlTheProviderDoesNotCheckStatus() {
+		HttpPaymentProvider provider = provider("secret", Duration.ofSeconds(5));
+
+		assertThat(provider.checksStatus()).isFalse();
+		assertThatIllegalStateException()
+			.isThrownBy(() -> provider.checkStatus(new ProviderStatusRequest(PAYMENT_ID, "acme_1")))
+			.withMessage("Payment provider http has no status URL");
+		assertThat(statusPath).hasValue(null);
+		assertThat(statusProvider("secret", Duration.ofSeconds(5)).checksStatus()).isTrue();
+	}
+
+	@Test
+	void statusRequestNeedsAPaymentId() {
+		assertThatIllegalArgumentException().isThrownBy(() -> new ProviderStatusRequest(null, "acme_1"))
+			.withMessage("paymentId is required");
+	}
+
+	private HttpPaymentProvider statusProvider(String apiKey, Duration readTimeout) {
+		URI url = URI.create("http://localhost:" + server.getAddress().getPort() + "/pay");
+		URI status = URI.create("http://localhost:" + server.getAddress().getPort() + "/status");
+		return new HttpPaymentProvider(
+				new HttpPaymentProviderProperties(url, apiKey, Duration.ofSeconds(2), readTimeout, null, status));
+	}
+
 	private HttpPaymentProvider webhookProvider() {
 		URI url = URI.create("http://localhost:" + server.getAddress().getPort() + "/pay");
 		return new HttpPaymentProvider(new HttpPaymentProviderProperties(url, null, Duration.ofSeconds(2),
-				Duration.ofSeconds(5), WEBHOOK_SECRET));
+				Duration.ofSeconds(5), WEBHOOK_SECRET, null));
 	}
 
 	private static byte[] webhookBody(String template) {
@@ -305,7 +430,7 @@ class HttpPaymentProviderTests {
 	private HttpPaymentProvider provider(String apiKey, Duration readTimeout) {
 		URI url = URI.create("http://localhost:" + server.getAddress().getPort() + "/pay");
 		return new HttpPaymentProvider(
-				new HttpPaymentProviderProperties(url, apiKey, Duration.ofSeconds(2), readTimeout, null));
+				new HttpPaymentProviderProperties(url, apiKey, Duration.ofSeconds(2), readTimeout, null, null));
 	}
 
 }

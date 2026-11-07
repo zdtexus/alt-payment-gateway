@@ -1,5 +1,6 @@
 package com.example.payment_service.provider;
 
+import java.net.URI;
 import java.net.http.HttpClient;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
@@ -22,13 +23,14 @@ import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.util.UriComponentsBuilder;
 
 import com.example.payment_service.error.InvalidWebhookException;
 import com.example.payment_service.error.InvalidWebhookSignatureException;
 
 @Component
 @ConditionalOnProperty(name = "payment.provider.http.url")
-public class HttpPaymentProvider implements PaymentProvider, WebhookProvider {
+public class HttpPaymentProvider implements PaymentProvider, WebhookProvider, StatusCheckingProvider {
 
 	public static final String NAME = "http";
 
@@ -39,6 +41,8 @@ public class HttpPaymentProvider implements PaymentProvider, WebhookProvider {
 	private final RestClient restClient;
 
 	private final String webhookSecret;
+
+	private final URI statusUrl;
 
 	public HttpPaymentProvider(HttpPaymentProviderProperties properties) {
 		JdkClientHttpRequestFactory requestFactory = new JdkClientHttpRequestFactory(httpClient(properties));
@@ -51,6 +55,7 @@ public class HttpPaymentProvider implements PaymentProvider, WebhookProvider {
 		}
 		this.restClient = builder.build();
 		this.webhookSecret = StringUtils.hasText(properties.webhookSecret()) ? properties.webhookSecret() : null;
+		this.statusUrl = properties.statusUrl();
 	}
 
 	static HttpClient httpClient(HttpPaymentProviderProperties properties) {
@@ -76,6 +81,31 @@ public class HttpPaymentProvider implements PaymentProvider, WebhookProvider {
 			.body(ProviderAnswer.class);
 		if (answer == null) {
 			throw new IllegalStateException("Payment provider http answered without a status");
+		}
+		return answer.toResult();
+	}
+
+	@Override
+	public boolean checksStatus() {
+		return statusUrl != null;
+	}
+
+	@Override
+	public ProviderResult checkStatus(ProviderStatusRequest request) {
+		if (!checksStatus()) {
+			throw new IllegalStateException("Payment provider http has no status URL");
+		}
+		UriComponentsBuilder uri = UriComponentsBuilder.fromUri(statusUrl).queryParam("paymentId", request.paymentId());
+		if (StringUtils.hasText(request.providerReference())) {
+			uri.queryParam("reference", request.providerReference());
+		}
+		ProviderAnswer answer = restClient.get()
+			.uri(uri.encode().build().toUri())
+			.accept(MediaType.APPLICATION_JSON)
+			.retrieve()
+			.body(ProviderAnswer.class);
+		if (answer == null) {
+			throw new IllegalStateException("Payment provider http answered the status query without a status");
 		}
 		return answer.toResult();
 	}

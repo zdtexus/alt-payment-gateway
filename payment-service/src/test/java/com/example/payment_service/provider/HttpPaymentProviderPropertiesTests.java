@@ -9,6 +9,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.test.context.ConfigDataApplicationContextInitializer;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
@@ -70,10 +71,11 @@ class HttpPaymentProviderPropertiesTests {
 	void toStringMasksApiKeyAndWebhookSecret() {
 		HttpPaymentProviderProperties properties = new HttpPaymentProviderProperties(
 				URI.create("https://pay.example.com/charge"), "provider-api-key", Duration.ofSeconds(2),
-				Duration.ofSeconds(10), "webhook-secret-123456");
+				Duration.ofSeconds(10), "webhook-secret-123456", URI.create("https://pay.example.com/status"));
 
 		assertThat(properties).hasToString("HttpPaymentProviderProperties[url=https://pay.example.com/charge, "
-				+ "apiKey=***, connectTimeout=PT2S, readTimeout=PT10S, webhookSecret=***]");
+				+ "apiKey=***, connectTimeout=PT2S, readTimeout=PT10S, webhookSecret=***, "
+				+ "statusUrl=https://pay.example.com/status]");
 		assertThat(properties.toString()).doesNotContain("provider-api-key").doesNotContain("webhook-secret-123456");
 	}
 
@@ -81,10 +83,32 @@ class HttpPaymentProviderPropertiesTests {
 	void toStringShowsMissingSecretsAsNull() {
 		HttpPaymentProviderProperties properties = new HttpPaymentProviderProperties(
 				URI.create("https://pay.example.com/charge"), "", Duration.ofSeconds(2), Duration.ofSeconds(10),
-				null);
+				null, null);
 
 		assertThat(properties).hasToString("HttpPaymentProviderProperties[url=https://pay.example.com/charge, "
-				+ "apiKey=null, connectTimeout=PT2S, readTimeout=PT10S, webhookSecret=null]");
+				+ "apiKey=null, connectTimeout=PT2S, readTimeout=PT10S, webhookSecret=null, statusUrl=null]");
+	}
+
+	@Test
+	void statusUrlIsNotSetByDefault() {
+		contextRunner.withInitializer(new ConfigDataApplicationContextInitializer())
+			.withPropertyValues("payment.provider.http.url=https://pay.example.com/charge")
+			.run((context) -> assertThat(context.getBean(HttpPaymentProviderProperties.class).statusUrl()).isNull());
+	}
+
+	@Test
+	void statusUrlIsSetThroughItsEnvironmentVariable() {
+		contextRunner.withInitializer(new ConfigDataApplicationContextInitializer())
+			.withInitializer((context) -> context.getEnvironment()
+				.getPropertySources()
+				.addFirst(new SystemEnvironmentPropertySource("test-systemEnvironment",
+						Map.of("PAYMENT_PROVIDER_HTTP_URL", "https://pay.example.com/charge",
+								"PAYMENT_PROVIDER_HTTP_STATUS_URL", "https://pay.example.com/status"))))
+			.run((context) -> {
+				assertThat(context.getBean(HttpPaymentProviderProperties.class).statusUrl())
+					.isEqualTo(URI.create("https://pay.example.com/status"));
+				assertThat(context.getBean(HttpPaymentProvider.class).checksStatus()).isTrue();
+			});
 	}
 
 	@Test
