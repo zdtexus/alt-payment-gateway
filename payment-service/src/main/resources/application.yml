@@ -43,7 +43,12 @@ payment:
       webhook-secret: ${PAYMENT_PROVIDER_HTTP_WEBHOOK_SECRET:}
       status-url: ${PAYMENT_PROVIDER_HTTP_STATUS_URL:}
   reconciliation:
+    enabled: ${PAYMENT_RECONCILIATION_ENABLED:true}
+    interval: ${PAYMENT_RECONCILIATION_INTERVAL:1m}
     min-age: ${PAYMENT_RECONCILIATION_MIN_AGE:2m}
+    batch-size: ${PAYMENT_RECONCILIATION_BATCH_SIZE:50}
+    max-backoff: ${PAYMENT_RECONCILIATION_MAX_BACKOFF:1h}
+    alert-after: ${PAYMENT_RECONCILIATION_ALERT_AFTER:24h}
   rules:
     CARD:
       currencies: ${PAYMENT_RULES_CARD_CURRENCIES:EUR,USD,PLN,UAH}

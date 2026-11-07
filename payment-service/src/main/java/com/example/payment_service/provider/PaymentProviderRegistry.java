@@ -42,6 +42,16 @@ public class PaymentProviderRegistry {
 			.filter(WebhookProvider::acceptsWebhooks);
 	}
 
+	public Map<String, StatusCheckingProvider> statusCheckingProviders() {
+		Map<String, StatusCheckingProvider> checking = new TreeMap<>();
+		providers.forEach((name, provider) -> {
+			if (provider instanceof StatusCheckingProvider statusChecking && statusChecking.checksStatus()) {
+				checking.put(name, statusChecking);
+			}
+		});
+		return checking;
+	}
+
 	public Set<String> names() {
 		return providers.keySet();
 	}

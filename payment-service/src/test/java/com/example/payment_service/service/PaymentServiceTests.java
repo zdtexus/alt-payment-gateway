@@ -81,7 +81,8 @@ class PaymentServiceTests {
 
 	private final PaymentService paymentService = new PaymentService(transactionRepository, ruleValidator,
 			providerRouter, eventPublisher, new TransactionTemplate(transactionManager),
-			new ReconciliationProperties(MIN_AGE));
+			new ReconciliationProperties(true, Duration.ofMinutes(1), MIN_AGE, 50, Duration.ofHours(1),
+					Duration.ofHours(24)));
 
 	private final Merchant merchant = new Merchant();
 
@@ -390,6 +391,21 @@ class PaymentServiceTests {
 
 		assertThat(settled.getNextCheckAt()).isNull();
 		assertThat(stillPending.getNextCheckAt()).isEqualTo(due);
+	}
+
+	@Test
+	void statusCheckSettlesAPendingPaymentAndIgnoresAFinalOne() {
+		Transaction pending = pendingTransaction("ref-9");
+		pending.setNextCheckAt(Instant.parse("2026-01-15T10:32:00Z"));
+		given(transactionRepository.findLockedById(PAYMENT_ID)).willReturn(Optional.of(pending));
+
+		assertThat(paymentService.settleFromStatusCheck(PAYMENT_ID, ProviderResult.approved("ref-9")))
+			.isEqualTo(TransactionStatus.SUCCEEDED);
+		assertThat(pending.getNextCheckAt()).isNull();
+		assertThat(paymentService.settleFromStatusCheck(PAYMENT_ID, ProviderResult.declined("Late", "ref-9")))
+			.isEqualTo(TransactionStatus.SUCCEEDED);
+		assertThat(pending.getDeclineReason()).isNull();
+		verify(eventPublisher, times(1)).publishEvent(any(PaymentProcessedEvent.class));
 	}
 
 	@Test

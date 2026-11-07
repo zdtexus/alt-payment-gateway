@@ -151,6 +151,10 @@ public class PaymentService {
 		return new PaymentOutcome(PaymentResponse.from(transaction), false);
 	}
 
+	public TransactionStatus settleFromStatusCheck(UUID paymentId, ProviderResult result) {
+		return transactionTemplate.execute((status) -> applyResult(paymentId, result)).payment().status();
+	}
+
 	public void settleFromWebhook(String provider, ProviderWebhook webhook) {
 		transactionTemplate.executeWithoutResult((status) -> {
 			String reference = webhook.result().reference();

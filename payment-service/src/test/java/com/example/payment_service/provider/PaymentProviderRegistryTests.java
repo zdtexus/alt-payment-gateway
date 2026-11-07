@@ -47,6 +47,31 @@ class PaymentProviderRegistryTests {
 			.withMessage("No payment provider is available");
 	}
 
+	@Test
+	void listsOnlyProvidersThatCanCheckStatusNow() {
+		StatusProvider checking = new StatusProvider("checking", true);
+		StatusProvider switchedOff = new StatusProvider("switched-off", false);
+
+		PaymentProviderRegistry registry = new PaymentProviderRegistry(
+				List.of(new NamedProvider("plain"), switchedOff, checking));
+
+		assertThat(registry.statusCheckingProviders()).containsOnlyKeys("checking").containsEntry("checking", checking);
+	}
+
+	record StatusProvider(String name, boolean checksStatus) implements PaymentProvider, StatusCheckingProvider {
+
+		@Override
+		public ProviderResult process(ProviderRequest request) {
+			return ProviderResult.approved();
+		}
+
+		@Override
+		public ProviderResult checkStatus(ProviderStatusRequest request) {
+			return ProviderResult.approved();
+		}
+
+	}
+
 	record NamedProvider(String name) implements PaymentProvider {
 
 		@Override
