@@ -1,16 +1,24 @@
 package com.example.api_gateway.ratelimit;
 
+import java.net.InetAddress;
+
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.test.context.ConfigDataApplicationContextInitializer;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Configuration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 class RateLimitPropertiesTests {
+
+	private static final String[] LIMITS = { "rate-limit.api-key.replenish-rate=10",
+			"rate-limit.api-key.burst-capacity=20", "rate-limit.client-ip.replenish-rate=20",
+			"rate-limit.client-ip.burst-capacity=40", "rate-limit.webhook.replenish-rate=50",
+			"rate-limit.webhook.burst-capacity=100" };
 
 	private final ApplicationContextRunner runner = new ApplicationContextRunner()
 		.withUserConfiguration(PropertiesConfig.class);
@@ -36,6 +44,44 @@ class RateLimitPropertiesTests {
 				.getFailure()
 				.rootCause()
 				.hasMessage("rate-limit.api-key, rate-limit.client-ip and rate-limit.webhook must be set"));
+	}
+
+	@Test
+	void trustsNoProxyByDefault() {
+		runner.withInitializer(new ConfigDataApplicationContextInitializer()).run((context) -> {
+			TrustedProxies proxies = context.getBean(RateLimitProperties.class).trustedProxies();
+			assertThat(proxies.isEmpty()).isTrue();
+		});
+	}
+
+	@Test
+	void trustsNoProxyWhenNotSetAtAll() {
+		runner.withPropertyValues(LIMITS).run((context) -> {
+			TrustedProxies proxies = context.getBean(RateLimitProperties.class).trustedProxies();
+			assertThat(proxies.isEmpty()).isTrue();
+		});
+	}
+
+	@Test
+	void bindsTrustedProxiesFromEnvironmentVariable() {
+		runner.withInitializer(new ConfigDataApplicationContextInitializer())
+			.withPropertyValues("TRUSTED_PROXIES=10.0.0.0/8, 192.168.1.10")
+			.run((context) -> {
+				TrustedProxies proxies = context.getBean(RateLimitProperties.class).trustedProxies();
+				assertThat(proxies).hasToString("[10.0.0.0/8, 192.168.1.10/32]");
+				assertThat(proxies.contains(InetAddress.ofLiteral("10.1.2.3"))).isTrue();
+				assertThat(proxies.contains(InetAddress.ofLiteral("192.168.1.11"))).isFalse();
+			});
+	}
+
+	@Test
+	void invalidTrustedProxyStopsStartupAndNamesTheEntry() {
+		runner.withPropertyValues(LIMITS)
+			.withPropertyValues("rate-limit.trusted-proxies=10.0.0.0/8, 10.0.0.0/33")
+			.run((context) -> assertThat(context).hasFailed()
+				.getFailure()
+				.rootCause()
+				.hasMessage("Invalid trusted proxy '10.0.0.0/33': prefix length must be 0-32"));
 	}
 
 	@ParameterizedTest

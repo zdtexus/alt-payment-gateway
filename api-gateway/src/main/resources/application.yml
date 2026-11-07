@@ -61,6 +61,7 @@ rate-limit:
   webhook:
     replenish-rate: ${RATE_LIMIT_WEBHOOK_REPLENISH_RATE:50}
     burst-capacity: ${RATE_LIMIT_WEBHOOK_BURST_CAPACITY:100}
+  trusted-proxies: ${TRUSTED_PROXIES:}
 
 logging:
   level:

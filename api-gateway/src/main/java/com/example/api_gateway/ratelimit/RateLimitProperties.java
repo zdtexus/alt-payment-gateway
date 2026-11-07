@@ -3,12 +3,15 @@ package com.example.api_gateway.ratelimit;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 @ConfigurationProperties("rate-limit")
-public record RateLimitProperties(Limit apiKey, Limit clientIp, Limit webhook) {
+public record RateLimitProperties(Limit apiKey, Limit clientIp, Limit webhook, TrustedProxies trustedProxies) {
 
 	public RateLimitProperties {
 		if (apiKey == null || clientIp == null || webhook == null) {
 			throw new IllegalArgumentException(
 					"rate-limit.api-key, rate-limit.client-ip and rate-limit.webhook must be set");
+		}
+		if (trustedProxies == null) {
+			trustedProxies = TrustedProxies.none();
 		}
 	}
 
