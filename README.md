@@ -12,7 +12,7 @@ The system consists of an API gateway and a payment service, backed by PostgreSQ
 - Safe retries with the `Idempotency-Key` header, so a retried payment is never charged twice
 - Multiple payment methods with per-method currency and amount rules, set in configuration
 - Payment providers selected per payment method: a simulated provider with a configurable success rate and latency, a fixed provider that always approves or always declines, and an HTTP provider with connect and read timeouts
-- Pending payments that a provider settles later through a signed webhook; every payment reaches its final status exactly once
+- Pending payments that a provider settles later through a signed webhook, or that are re-checked with the provider on a schedule; every payment reaches its final status exactly once
 - Asynchronous email and SMS receipts, sent only after the payment is committed as succeeded or declined
 - Consistent JSON error responses
 - Versioned database schema with Flyway
@@ -159,6 +159,13 @@ Services are configured through environment variables. Defaults are suitable for
 | `PAYMENT_PROVIDER_HTTP_CONNECT_TIMEOUT` | payment-service | `2s` | How long the `http` provider may take to accept the connection (`payment.provider.http.connect-timeout`) |
 | `PAYMENT_PROVIDER_HTTP_READ_TIMEOUT` | payment-service | `10s` | How long the `http` provider may take to answer (`payment.provider.http.read-timeout`). A payment whose provider doesn't answer in time stays `PENDING`. |
 | `PAYMENT_PROVIDER_HTTP_WEBHOOK_SECRET` | payment-service | | Shared secret the `http` provider signs its webhooks with, at least 16 characters (`payment.provider.http.webhook-secret`). Empty means the provider sends no webhooks (`404`). See [Provider webhooks](#provider-webhooks). |
+| `PAYMENT_PROVIDER_HTTP_STATUS_URL` | payment-service | | Endpoint the `http` provider answers status queries on (`payment.provider.http.status-url`). When set, `PENDING` payments of the `http` provider are re-checked there. See [Re-checking pending payments](#re-checking-pending-payments). |
+| `PAYMENT_RECONCILIATION_ENABLED` | payment-service | `true` | Run the job that re-checks `PENDING` payments with their providers |
+| `PAYMENT_RECONCILIATION_INTERVAL` | payment-service | `1m` | Pause between two runs of the job, and the first backoff step |
+| `PAYMENT_RECONCILIATION_MIN_AGE` | payment-service | `2m` | How long after its creation a `PENDING` payment is checked for the first time |
+| `PAYMENT_RECONCILIATION_BATCH_SIZE` | payment-service | `50` | Payments one run checks at most, from 1 to 1000 |
+| `PAYMENT_RECONCILIATION_MAX_BACKOFF` | payment-service | `1h` | Longest wait between two checks of one payment. At least the interval. |
+| `PAYMENT_RECONCILIATION_ALERT_AFTER` | payment-service | `24h` | Age after which a payment that is still `PENDING` is logged as an error on every check |
 | `SMS_PROVIDER` | payment-service | `log` | SMS implementation: `log` or `http` |
 | `NOTIFICATION_SMS_HTTP_URL` | payment-service | | SMS gateway endpoint, required when `SMS_PROVIDER=http` |
 | `NOTIFICATION_SMS_HTTP_API_KEY` | payment-service | | Sent as `Authorization: Bearer <key>` when set |
@@ -203,7 +210,9 @@ Available providers:
   {"paymentId": "7f8e2a1c-4b3d-4e5f-9a6b-1c2d3e4f5a6b", "method": "CARD", "currency": "EUR", "amount": 49.90}
   ```
 
-  and expects `{"status": "APPROVED" | "DECLINED" | "PENDING", "reference": "...", "reason": "..."}` (`reason` is required for `DECLINED`, `reference` for `PENDING`). Any answer the service can't trust leaves the payment `PENDING` instead of declining it: no connection within the connect timeout, no answer within the read timeout, an error status, or an unknown or incomplete body. The provider may have charged in those cases, so declining would be wrong. The provider reports the final result later through a [webhook](#provider-webhooks).
+  and expects `{"status": "APPROVED" | "DECLINED" | "PENDING", "reference": "...", "reason": "..."}` (`reason` is required for `DECLINED`, `reference` for `PENDING`). Any answer the service can't trust leaves the payment `PENDING` instead of declining it: no connection within the connect timeout, no answer within the read timeout, an error status, or an unknown or incomplete body.
+
+  With `PAYMENT_PROVIDER_HTTP_STATUS_URL` set, the provider is also asked about payments that are still `PENDING`: `GET <status URL>?paymentId=<id>&reference=<reference>` (no `reference` while the provider hasn't given one), with the same bearer key and timeouts. It answers in the same format; `PENDING` means "still not known". Untrusted answers, including any error status, count as a failed check, never as a decline. The provider may have charged in those cases, so declining would be wrong. The provider reports the final result later through a [webhook](#provider-webhooks).
 
 Each transaction stores the provider name and the provider's reference (see [Database](#database)). Both are internal: merchants don't see them in API responses, so providers and routes can change without affecting merchants.
 
@@ -214,6 +223,7 @@ To add a provider:
 3. Return `ProviderResult.approved(reference)` or `ProviderResult.declined(reason, reference)`, passing the provider's own transaction ID (at most 255 characters) when it has one. The provider is called outside any database transaction, after the `PENDING` payment is committed. A thrown exception counts as an unknown result: it is logged as an error with the payment ID, the payment stays `PENDING` with no receipt, and the merchant gets `201` with status `PENDING` (see [Payment statuses](#payment-statuses)).
 4. Route methods to it, for example `PAYMENT_PROVIDER_ROUTES_CRYPTO=acme`. Payment rules (currencies and limits per method) still apply before any provider is called.
 5. If the provider confirms payments later, return `ProviderResult.pending(reference)` and also implement `WebhookProvider`: `acceptsWebhooks()` (for example only when a secret is configured) and `readWebhook(body, signature)`, which checks the provider's signature over the raw body and returns the result with its reference. Its webhooks are then accepted at `/api/v1/providers/acme/webhook`.
+6. If the provider can be asked about a payment, also implement `StatusCheckingProvider`: `checksStatus()` (for example only when a status URL is configured) and `checkStatus(request)`, which returns the current result for `request.paymentId()` and `request.providerReference()` (which may be `null`). Its `PENDING` payments are then re-checked on a schedule. Throw on anything you can't trust.
 
 ## API
 
@@ -417,7 +427,20 @@ A payment is stored as `PENDING` and committed before its provider is called, th
 
 A payment moves from `PENDING` to `SUCCEEDED` or `DECLINED` once, either from the provider's answer to the payment request or later from the provider's [webhook](#provider-webhooks), whichever comes first; a final status never changes.
 
-A payment stays `PENDING` when the provider's result is unknown: the provider answered `PENDING` (it confirms later, for example after a redirect), failed with an error, or didn't answer within its timeout. The merchant still gets `201` with status `PENDING` and the payment's `Location`. It gets no receipt yet, and is not charged again on an idempotent retry. A provider failure or timeout is logged as an error with the provider name and payment ID. The provider settles the payment through its webhook; a payment whose provider sends no webhooks stays `PENDING` until it is checked by hand, and `GET /api/v1/payments?status=PENDING` lists such payments.
+A payment stays `PENDING` when the provider's result is unknown: the provider answered `PENDING` (it confirms later, for example after a redirect), failed with an error, or didn't answer within its timeout. The merchant still gets `201` with status `PENDING` and the payment's `Location`. It gets no receipt yet, and is not charged again on an idempotent retry. A provider failure or timeout is logged as an error with the provider name and payment ID. The provider settles the payment through its webhook, or the service asks the provider again (see below), whichever happens first.
+
+#### Re-checking pending payments
+
+A webhook can get lost, and some providers send none. So a background job regularly asks every provider that supports status queries (today `http` with `PAYMENT_PROVIDER_HTTP_STATUS_URL` set) what happened to its `PENDING` payments:
+
+- **When.** A payment is first checked `PAYMENT_RECONCILIATION_MIN_AGE` (2 minutes) after its creation. The job runs every `PAYMENT_RECONCILIATION_INTERVAL` (1 minute) and checks at most `PAYMENT_RECONCILIATION_BATCH_SIZE` (50) due payments per run.
+- **Backoff.** If the answer is still `PENDING`, or the check fails (timeout, error status, untrusted answer), the next check waits twice as long as the one before: 1, 2, 4, 8 … minutes, up to `PAYMENT_RECONCILIATION_MAX_BACKOFF` (1 hour). A payment is never declined or expired because it is old, because the provider may have charged it.
+- **Settling.** An `APPROVED` or `DECLINED` answer settles the payment exactly like a webhook: the row is locked and changed only while it is `PENDING`, and the receipt is sent once. If a webhook settles the payment while a check is running, the webhook wins and the late answer is ignored (with a warning).
+- **Alert.** A payment still `PENDING` after `PAYMENT_RECONCILIATION_ALERT_AFTER` (24 hours) is logged at `ERROR` on every check, with its ID, for example `Payment 4adb5fb6-… with provider http is still PENDING PT26H after it was created (check 9); check it with the provider`.
+- **Several instances.** Each run claims its payments with `SELECT … FOR UPDATE SKIP LOCKED` and moves their next check forward before calling the provider. Instances sharing the database therefore never ask about the same payment at the same time, and they don't wait for each other.
+- **Logs.** Each run that checked something logs one summary, for example `Checked 8 pending payments with their providers: 1 settled, 0 still pending, 7 failed`; a failed check is one `WARN` line with the cause.
+
+Payments of providers without status queries (`simulated`, `fixed`, or `http` without a status URL) are never checked; they are settled by the provider's answer or webhook. `GET /api/v1/payments?status=PENDING` lists everything still open. Set `PAYMENT_RECONCILIATION_ENABLED=false` to switch the job off.
 
 ### Provider webhooks
 
@@ -489,10 +512,13 @@ merchants      id, name, api_key_hash, email, phone, status
 transactions   id, merchant_id, amount, currency, payment_method, status,
                decline_reason, created_at, processed_at,
                idempotency_key, request_hash,
-               provider, provider_reference
+               provider, provider_reference,
+               next_check_at, check_attempts
 ```
 
 Each transaction records which payment provider handled it (`provider`, for example `simulated`) and that provider's own transaction ID (`provider_reference`, empty if the provider returns none). Payments made before these columns existed are recorded as `simulated`. An index on (`provider`, `provider_reference`) serves the webhook lookup.
+
+`next_check_at` is when a `PENDING` payment is next checked with its provider and `check_attempts` how often it has been checked (see [Re-checking pending payments](#re-checking-pending-payments)). A final payment has no `next_check_at`; the database enforces this with a check constraint, and a partial index over `PENDING` rows lets the job find due payments quickly.
 
 To reset the local database:
 
