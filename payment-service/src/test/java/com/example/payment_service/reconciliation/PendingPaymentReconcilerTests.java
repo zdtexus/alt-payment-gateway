@@ -71,10 +71,12 @@ class PendingPaymentReconcilerTests {
 
 	private final RefundStatusCheckingProvider refundProvider = mock();
 
+	private final com.example.payment_service.service.CaptureService captureService = mock();
+
 	private final PendingPaymentReconciler reconciler = new PendingPaymentReconciler(transactionRepository,
 			providerRegistry, paymentService, new TransactionTemplate(transactionManager),
 			new ReconciliationProperties(true, INTERVAL, Duration.ofMinutes(2), 50, MAX_BACKOFF, Duration.ofHours(24)),
-			refundRepository, refundService);
+			refundRepository, refundService, captureService);
 
 	@ParameterizedTest
 	@CsvSource({ "0, 1", "1, 2", "2, 4", "3, 8", "4, 16", "5, 32", "6, 60", "7, 60", "40, 60", "2147483647, 60",

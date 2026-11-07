@@ -109,6 +109,9 @@ public class Transaction {
 	@Column(name = "action_request_hash", length = 64)
 	private String actionRequestHash;
 
+	@Column(name = "action_requested_at")
+	private Instant actionRequestedAt;
+
 	@PrePersist
 	void onCreate() {
 		if (createdAt == null) {

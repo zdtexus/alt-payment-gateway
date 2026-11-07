@@ -13,10 +13,17 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import com.example.payment_service.entity.CaptureMethod;
+import com.example.payment_service.entity.PendingAction;
 import com.example.payment_service.entity.Refund;
 import com.example.payment_service.entity.RefundStatus;
 import com.example.payment_service.entity.Transaction;
 import com.example.payment_service.entity.TransactionStatus;
+import com.example.payment_service.error.PaymentNotVoidableException;
+import com.example.payment_service.error.VoidDeclinedException;
+import com.example.payment_service.provider.ActionStatusRequest;
+import com.example.payment_service.provider.AuthorizationStatusCheckingProvider;
+import com.example.payment_service.provider.AuthorizingProvider;
 import com.example.payment_service.provider.PaymentProviderRegistry;
 import com.example.payment_service.provider.ProviderResult;
 import com.example.payment_service.provider.ProviderStatusRequest;
@@ -25,6 +32,9 @@ import com.example.payment_service.provider.RefundStatusRequest;
 import com.example.payment_service.provider.StatusCheckingProvider;
 import com.example.payment_service.repository.RefundRepository;
 import com.example.payment_service.repository.TransactionRepository;
+import com.example.payment_service.dto.PaymentResponse;
+import com.example.payment_service.service.CaptureService;
+import com.example.payment_service.service.PaymentOutcome;
 import com.example.payment_service.service.PaymentService;
 import com.example.payment_service.service.RefundService;
 
@@ -49,10 +59,12 @@ public class PendingPaymentReconciler {
 
 	private final RefundService refundService;
 
+	private final CaptureService captureService;
+
 	public PendingPaymentReconciler(TransactionRepository transactionRepository,
 			PaymentProviderRegistry providerRegistry, PaymentService paymentService,
 			TransactionTemplate transactionTemplate, ReconciliationProperties properties,
-			RefundRepository refundRepository, RefundService refundService) {
+			RefundRepository refundRepository, RefundService refundService, CaptureService captureService) {
 		this.transactionRepository = transactionRepository;
 		this.providerRegistry = providerRegistry;
 		this.paymentService = paymentService;
@@ -60,6 +72,7 @@ public class PendingPaymentReconciler {
 		this.properties = properties;
 		this.refundRepository = refundRepository;
 		this.refundService = refundService;
+		this.captureService = captureService;
 	}
 
 	public void runScheduled() {
@@ -72,7 +85,119 @@ public class PendingPaymentReconciler {
 	}
 
 	public int reconcileDuePayments() {
-		return reconcilePayments() + reconcileRefunds();
+		return reconcilePayments() + reconcileRefunds() + reconcileActions() + voidExpiredAuthorizations();
+	}
+
+	private int reconcileActions() {
+		Map<String, AuthorizationStatusCheckingProvider> providers = providerRegistry
+			.authorizationStatusCheckingProviders();
+		if (providers.isEmpty()) {
+			return 0;
+		}
+		List<ClaimedAction> claimed = transactionTemplate.execute((status) -> {
+			Instant now = Instant.now().truncatedTo(ChronoUnit.MICROS);
+			return transactionRepository.findDueActionChecks(now, providers.keySet(), properties.batchSize())
+				.stream()
+				.map((payment) -> {
+					int attempts = payment.getCheckAttempts();
+					payment.setNextCheckAt(now.plus(backoff(attempts, properties.interval(), properties.maxBackoff())));
+					payment.setCheckAttempts(attempts + 1);
+					return new ClaimedAction(payment.getId(), payment.getProvider(), payment.getProviderReference(),
+							payment.getPendingAction(), payment.getActionRequestedAt(), attempts + 1);
+				})
+				.toList();
+		});
+		int settled = 0;
+		int stillPending = 0;
+		int failed = 0;
+		for (ClaimedAction action : claimed) {
+			switch (checkAction(action, providers.get(action.provider()))) {
+				case SETTLED -> settled++;
+				case STILL_PENDING -> stillPending++;
+				case FAILED -> failed++;
+			}
+		}
+		if (!claimed.isEmpty()) {
+			log.info("Checked {} pending captures and voids with their providers: {} settled, {} still pending, {} failed",
+					claimed.size(), settled, stillPending, failed);
+		}
+		return claimed.size();
+	}
+
+	private Outcome checkAction(ClaimedAction action, AuthorizationStatusCheckingProvider provider) {
+		Outcome outcome;
+		try {
+			ProviderResult result = provider
+				.checkActionStatus(new ActionStatusRequest(action.id(), action.reference(), action.action()));
+			PaymentResponse payment = captureService.settleFromStatusCheck(action.id(), action.action(), result);
+			outcome = (payment.pendingAction() == action.action()) ? Outcome.STILL_PENDING : Outcome.SETTLED;
+		}
+		catch (RuntimeException ex) {
+			log.warn("Status check {} for the {} of payment {} with provider {} failed; next check after backoff: {}",
+					action.attempt(), action.name(), action.id(), action.provider(), ex.toString());
+			outcome = Outcome.FAILED;
+		}
+		if (outcome != Outcome.SETTLED && action.requestedAt().plus(properties.alertAfter()).isBefore(Instant.now())) {
+			log.error("The {} of payment {} with provider {} is still pending {} after it was requested (check {}); "
+					+ "check it with the provider", action.name(), action.id(), action.provider(),
+					Duration.between(action.requestedAt(), Instant.now()).truncatedTo(ChronoUnit.MINUTES),
+					action.attempt());
+		}
+		return outcome;
+	}
+
+	private int voidExpiredAuthorizations() {
+		Map<String, AuthorizingProvider> providers = providerRegistry.authorizingProviders();
+		if (providers.isEmpty()) {
+			return 0;
+		}
+		List<ClaimedExpiry> claimed = transactionTemplate.execute((status) -> {
+			Instant now = Instant.now().truncatedTo(ChronoUnit.MICROS);
+			return transactionRepository.findExpiredAuthorizations(now, providers.keySet(), properties.batchSize())
+				.stream()
+				.map((payment) -> {
+					int attempts = payment.getCheckAttempts();
+					payment.setNextCheckAt(now.plus(backoff(attempts, properties.interval(), properties.maxBackoff())));
+					payment.setCheckAttempts(attempts + 1);
+					return new ClaimedExpiry(payment.getId(), payment.getProvider(), payment.getAuthorizationExpiresAt(),
+							attempts + 1);
+				})
+				.toList();
+		});
+		int voided = 0;
+		int stillPending = 0;
+		int failed = 0;
+		for (ClaimedExpiry expiry : claimed) {
+			try {
+				PaymentOutcome outcome = captureService.voidExpired(expiry.id());
+				if (outcome.payment().pendingAction() == null) {
+					voided++;
+				}
+				else {
+					stillPending++;
+				}
+			}
+			catch (PaymentNotVoidableException ex) {
+				voided++;
+			}
+			catch (VoidDeclinedException ex) {
+				log.error("Provider {} declined voiding the authorization of payment {} that expired at {} (attempt {}): "
+						+ "{}; it is tried again after backoff", expiry.provider(), expiry.id(), expiry.expiresAt(),
+						expiry.attempt(), ex.getMessage());
+				failed++;
+			}
+			catch (RuntimeException ex) {
+				log.warn("Voiding the expired authorization of payment {} with provider {} failed (attempt {}); "
+						+ "it is tried again after backoff: {}", expiry.id(), expiry.provider(), expiry.attempt(),
+						ex.toString());
+				failed++;
+			}
+		}
+		if (!claimed.isEmpty()) {
+			log.info("Voided {} expired authorizations with their providers: {} voided, {} still pending, {} failed",
+					claimed.size(), voided, stillPending, failed);
+		}
+		return claimed.size();
 	}
 
 	private int reconcilePayments() {
@@ -173,7 +298,8 @@ public class PendingPaymentReconciler {
 				transaction.setNextCheckAt(now.plus(backoff(attempts, properties.interval(), properties.maxBackoff())));
 				transaction.setCheckAttempts(attempts + 1);
 				return new ClaimedPayment(transaction.getId(), transaction.getProvider(),
-						transaction.getProviderReference(), transaction.getCreatedAt(), attempts + 1);
+						transaction.getProviderReference(), transaction.getCreatedAt(), attempts + 1,
+						transaction.getCaptureMethod());
 			}).toList();
 		});
 	}
@@ -181,8 +307,21 @@ public class PendingPaymentReconciler {
 	private Outcome check(ClaimedPayment payment, StatusCheckingProvider provider) {
 		Outcome outcome;
 		try {
-			ProviderResult result = provider.checkStatus(new ProviderStatusRequest(payment.id(), payment.reference()));
-			TransactionStatus status = paymentService.settleFromStatusCheck(payment.id(), result);
+			ProviderStatusRequest request = new ProviderStatusRequest(payment.id(), payment.reference());
+			TransactionStatus status;
+			if (payment.captureMethod() != CaptureMethod.MANUAL) {
+				status = paymentService.settleFromStatusCheck(payment.id(), provider.checkStatus(request));
+			}
+			else if (provider instanceof AuthorizationStatusCheckingProvider authorizing
+					&& authorizing.supportsManualCapture()) {
+				status = paymentService.settleAuthorizationFromStatusCheck(payment.id(),
+						authorizing.checkAuthorizationStatus(request));
+			}
+			else {
+				log.warn("Payment {} uses manual capture but provider {} can't check authorizations; it stays PENDING",
+						payment.id(), payment.provider());
+				status = TransactionStatus.PENDING;
+			}
 			outcome = (status == TransactionStatus.PENDING) ? Outcome.STILL_PENDING : Outcome.SETTLED;
 		}
 		catch (RuntimeException ex) {
@@ -209,7 +348,20 @@ public class PendingPaymentReconciler {
 
 	}
 
-	record ClaimedPayment(UUID id, String provider, String reference, Instant createdAt, int attempt) {
+	record ClaimedPayment(UUID id, String provider, String reference, Instant createdAt, int attempt,
+			CaptureMethod captureMethod) {
+	}
+
+	record ClaimedAction(UUID id, String provider, String reference, PendingAction action, Instant requestedAt,
+			int attempt) {
+
+		String name() {
+			return action.name().toLowerCase();
+		}
+
+	}
+
+	record ClaimedExpiry(UUID id, String provider, Instant expiresAt, int attempt) {
 	}
 
 	record ClaimedRefund(UUID id, UUID paymentId, String provider, String reference, Instant createdAt, int attempt) {

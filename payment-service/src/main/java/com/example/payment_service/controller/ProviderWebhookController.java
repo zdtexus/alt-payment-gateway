@@ -23,6 +23,7 @@ import com.example.payment_service.error.WebhookNotAcceptedException;
 import com.example.payment_service.provider.PaymentProviderRegistry;
 import com.example.payment_service.provider.ProviderWebhook;
 import com.example.payment_service.provider.WebhookProvider;
+import com.example.payment_service.service.CaptureService;
 import com.example.payment_service.service.PaymentService;
 import com.example.payment_service.service.RefundService;
 
@@ -39,11 +40,14 @@ public class ProviderWebhookController {
 
 	private final RefundService refundService;
 
+	private final CaptureService captureService;
+
 	public ProviderWebhookController(PaymentProviderRegistry providerRegistry, PaymentService paymentService,
-			RefundService refundService) {
+			RefundService refundService, CaptureService captureService) {
 		this.providerRegistry = providerRegistry;
 		this.paymentService = paymentService;
 		this.refundService = refundService;
+		this.captureService = captureService;
 	}
 
 	@PostMapping(path = "/{name}/webhook", consumes = MediaType.APPLICATION_JSON_VALUE)
@@ -54,7 +58,9 @@ public class ProviderWebhookController {
 					+ "reference yet) and moves from PENDING to SUCCEEDED or DECLINED once; the receipt is sent then. "
 					+ "A webhook for a payment that is already final changes nothing and still returns 204. "
 					+ "Refund results use the same endpoint and signature with \"type\": \"refund\": the refund "
-					+ "is found by the provider's reference (or by refundId while it has no reference yet).")
+					+ "is found by the provider's reference (or by refundId while it has no reference yet). "
+					+ "Manual capture uses \"type\": \"authorization\" (with expiresAt when approved), "
+					+ "\"capture\" and \"void\" (with paymentId).")
 	@ApiResponse(responseCode = "204", description = "Webhook accepted (applied, or already applied)")
 	@ApiResponse(responseCode = "400", description = "Body is not a valid webhook",
 			content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
@@ -82,6 +88,8 @@ public class ProviderWebhookController {
 		switch (webhook.type()) {
 			case PAYMENT -> paymentService.settleFromWebhook(name, webhook);
 			case REFUND -> refundService.settleFromWebhook(name, webhook);
+			case AUTHORIZATION -> paymentService.settleAuthorizationFromWebhook(name, webhook);
+			case CAPTURE, VOID -> captureService.settleFromWebhook(name, webhook);
 		}
 		return ResponseEntity.noContent().build();
 	}

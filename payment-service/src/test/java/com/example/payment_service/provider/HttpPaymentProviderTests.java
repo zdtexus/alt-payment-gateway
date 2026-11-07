@@ -61,6 +61,8 @@ class HttpPaymentProviderTests {
 
 	private final AtomicReference<String> statusAccept = new AtomicReference<>();
 
+	private final AtomicReference<String> requestPath = new AtomicReference<>();
+
 	private volatile int responseStatus = 200;
 
 	private volatile String responseBody = """
@@ -103,6 +105,21 @@ class HttpPaymentProviderTests {
 				out.write(bytes);
 			}
 		});
+		for (String path : java.util.List.of("/authorize", "/capture", "/void")) {
+			server.createContext(path, (exchange) -> {
+				method.set(exchange.getRequestMethod());
+				requestPath.set(exchange.getRequestURI().getPath());
+				authorization.set(exchange.getRequestHeaders().getFirst("Authorization"));
+				idempotencyKey.set(exchange.getRequestHeaders().getFirst("Idempotency-Key"));
+				body.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+				byte[] bytes = responseBody.getBytes(StandardCharsets.UTF_8);
+				exchange.getResponseHeaders().set("Content-Type", "application/json");
+				exchange.sendResponseHeaders(responseStatus, (bytes.length == 0) ? -1 : bytes.length);
+				try (OutputStream out = exchange.getResponseBody()) {
+					out.write(bytes);
+				}
+			});
+		}
 		server.createContext("/status", (exchange) -> {
 			method.set(exchange.getRequestMethod());
 			authorization.set(exchange.getRequestHeaders().getFirst("Authorization"));
@@ -530,6 +547,162 @@ class HttpPaymentProviderTests {
 		assertThatExceptionOfType(InvalidWebhookException.class)
 			.isThrownBy(() -> webhookProvider().readWebhook(body, HttpPaymentProvider.sign(WEBHOOK_SECRET, body)))
 			.withMessage("Unknown webhook type 'chargeback'");
+	}
+
+	private static final java.time.Instant EXPIRES = java.time.Instant.parse("2026-01-22T10:30:00Z");
+
+	@Test
+	void authorizeIsAPostWithThePaymentIdAsKeyAndReadsTheExpiry() {
+		responseBody = """
+				{"status":"APPROVED","reference":"acme_a_1","expiresAt":"2026-01-22T10:30:00Z"}""";
+
+		AuthorizationResult result = manualProvider("secret").authorize(REQUEST);
+
+		assertThat(result).isEqualTo(AuthorizationResult.approved("acme_a_1", EXPIRES));
+		assertThat(method).hasValue("POST");
+		assertThat(requestPath).hasValue("/authorize");
+		assertThat(authorization).hasValue("Bearer secret");
+		assertThat(idempotencyKey).hasValue(PAYMENT_ID.toString());
+		assertThat(body.get()).contains("\"paymentId\":\"" + PAYMENT_ID + "\"")
+			.contains("\"method\":\"CARD\"")
+			.contains("\"currency\":\"EUR\"")
+			.contains("\"amount\":");
+	}
+
+	@Test
+	void anApprovedAuthorizationWithoutAnExpiryIsUntrusted() {
+		responseBody = """
+				{"status":"APPROVED","reference":"acme_a_1"}""";
+
+		assertThatIllegalArgumentException().isThrownBy(() -> manualProvider("secret").authorize(REQUEST))
+			.withMessage("An approved authorization needs an expiry");
+	}
+
+	@Test
+	void declinedAndPendingAuthorizationsAreRead() {
+		responseBody = """
+				{"status":"DECLINED","reference":"acme_a_1","reason":"Insufficient funds","expiresAt":"2026-01-22T10:30:00Z"}""";
+		assertThat(manualProvider("secret").authorize(REQUEST))
+			.isEqualTo(AuthorizationResult.declined("Insufficient funds", "acme_a_1"));
+		responseBody = """
+				{"status":"PENDING","reference":"acme_a_2"}""";
+		assertThat(manualProvider("secret").authorize(REQUEST)).isEqualTo(AuthorizationResult.pending("acme_a_2"));
+	}
+
+	@Test
+	void captureIsAPostWithItsOwnIdempotencyKey() {
+		responseBody = """
+				{"status":"APPROVED","reference":"acme_c_1"}""";
+
+		ProviderResult result = manualProvider("secret")
+			.capture(new CaptureRequest(PAYMENT_ID, "acme_a_1", "EUR", new BigDecimal("30.00")));
+
+		assertThat(result).isEqualTo(ProviderResult.approved("acme_c_1"));
+		assertThat(requestPath).hasValue("/capture");
+		assertThat(idempotencyKey).hasValue(PAYMENT_ID + ":capture");
+		assertThat(body.get()).contains("\"paymentId\":\"" + PAYMENT_ID + "\"")
+			.contains("\"authorizationReference\":\"acme_a_1\"")
+			.contains("\"currency\":\"EUR\"")
+			.contains("\"amount\":30.00");
+	}
+
+	@Test
+	void voidIsAPostWithItsOwnIdempotencyKey() {
+		responseBody = """
+				{"status":"DECLINED","reference":"acme_v_1","reason":"Already captured"}""";
+
+		ProviderResult result = manualProvider("secret").voidAuthorization(new VoidRequest(PAYMENT_ID, "acme_a_1"));
+
+		assertThat(result).isEqualTo(ProviderResult.declined("Already captured", "acme_v_1"));
+		assertThat(requestPath).hasValue("/void");
+		assertThat(idempotencyKey).hasValue(PAYMENT_ID + ":void");
+		assertThat(body.get()).isEqualTo("{\"paymentId\":\"" + PAYMENT_ID + "\",\"authorizationReference\":\"acme_a_1\"}");
+	}
+
+	@Test
+	void withoutTheThreeUrlsTheProviderDoesNotAuthorize() {
+		HttpPaymentProvider provider = provider("secret", Duration.ofSeconds(5));
+
+		assertThat(provider.supportsManualCapture()).isFalse();
+		assertThatIllegalStateException().isThrownBy(() -> provider.authorize(REQUEST))
+			.withMessage("Payment provider http has no authorize, capture and void URLs");
+		assertThat(method).hasValue(null);
+		assertThat(manualProvider("secret").supportsManualCapture()).isTrue();
+	}
+
+	@Test
+	void authorizationStatusQueryNamesItsType() {
+		responseBody = """
+				{"status":"APPROVED","reference":"acme_a_1","expiresAt":"2026-01-22T10:30:00Z"}""";
+
+		AuthorizationResult result = manualProvider("secret")
+			.checkAuthorizationStatus(new ProviderStatusRequest(PAYMENT_ID, "acme_a_1"));
+
+		assertThat(result).isEqualTo(AuthorizationResult.approved("acme_a_1", EXPIRES));
+		assertThat(method).hasValue("GET");
+		assertThat(statusQuery).hasValue("paymentId=" + PAYMENT_ID + "&reference=acme_a_1&type=authorization");
+	}
+
+	@Test
+	void captureAndVoidStatusQueriesNameTheirType() {
+		HttpPaymentProvider provider = manualProvider("secret");
+
+		provider.checkActionStatus(new ActionStatusRequest(PAYMENT_ID, "acme_a_1",
+				com.example.payment_service.entity.PendingAction.CAPTURE));
+		assertThat(statusQuery).hasValue("paymentId=" + PAYMENT_ID + "&reference=acme_a_1&type=capture");
+		provider.checkActionStatus(
+				new ActionStatusRequest(PAYMENT_ID, null, com.example.payment_service.entity.PendingAction.VOID));
+		assertThat(statusQuery).hasValue("paymentId=" + PAYMENT_ID + "&type=void");
+	}
+
+	@Test
+	void readsSignedAuthorizationCaptureAndVoidWebhooks() {
+		byte[] authorization = webhookBody("""
+				{"type":"authorization","paymentId":"%s","status":"APPROVED","reference":"acme_a_1","expiresAt":"2026-01-22T10:30:00Z"}""");
+		byte[] capture = webhookBody("""
+				{"type":"capture","paymentId":"%s","status":"APPROVED","reference":"acme_c_1"}""");
+		byte[] voided = webhookBody("""
+				{"type":"void","paymentId":"%s","status":"DECLINED","reason":"Already captured","reference":"acme_v_1"}""");
+		HttpPaymentProvider provider = webhookProvider();
+
+		assertThat(provider.readWebhook(authorization, HttpPaymentProvider.sign(WEBHOOK_SECRET, authorization)))
+			.isEqualTo(ProviderWebhook.authorization(PAYMENT_ID, ProviderResult.approved("acme_a_1"), EXPIRES));
+		assertThat(provider.readWebhook(capture, HttpPaymentProvider.sign(WEBHOOK_SECRET, capture)))
+			.isEqualTo(ProviderWebhook.capture(PAYMENT_ID, ProviderResult.approved("acme_c_1")));
+		assertThat(provider.readWebhook(voided, HttpPaymentProvider.sign(WEBHOOK_SECRET, voided)))
+			.isEqualTo(ProviderWebhook.voided(PAYMENT_ID, ProviderResult.declined("Already captured", "acme_v_1")));
+	}
+
+	@Test
+	void anApprovedAuthorizationWebhookNeedsItsExpiry() {
+		byte[] body = webhookBody("""
+				{"type":"authorization","paymentId":"%s","status":"APPROVED","reference":"acme_a_1"}""");
+
+		assertThatExceptionOfType(InvalidWebhookException.class)
+			.isThrownBy(() -> webhookProvider().readWebhook(body, HttpPaymentProvider.sign(WEBHOOK_SECRET, body)))
+			.withMessage("An approved authorization webhook needs expiresAt");
+	}
+
+	@Test
+	void captureAndVoidWebhooksNeedThePaymentId() {
+		byte[] capture = "{\"type\":\"capture\",\"status\":\"APPROVED\",\"reference\":\"acme_c_1\"}"
+			.getBytes(StandardCharsets.UTF_8);
+		byte[] voided = "{\"type\":\"void\",\"status\":\"APPROVED\",\"reference\":\"acme_v_1\"}"
+			.getBytes(StandardCharsets.UTF_8);
+
+		assertThatExceptionOfType(InvalidWebhookException.class)
+			.isThrownBy(() -> webhookProvider().readWebhook(capture, HttpPaymentProvider.sign(WEBHOOK_SECRET, capture)))
+			.withMessage("A capture webhook needs a paymentId");
+		assertThatExceptionOfType(InvalidWebhookException.class)
+			.isThrownBy(() -> webhookProvider().readWebhook(voided, HttpPaymentProvider.sign(WEBHOOK_SECRET, voided)))
+			.withMessage("A void webhook needs a paymentId");
+	}
+
+	private HttpPaymentProvider manualProvider(String apiKey) {
+		String base = "http://localhost:" + server.getAddress().getPort();
+		return new HttpPaymentProvider(new HttpPaymentProviderProperties(URI.create(base + "/pay"), apiKey,
+				Duration.ofSeconds(2), Duration.ofSeconds(5), null, URI.create(base + "/status"), null,
+				URI.create(base + "/authorize"), URI.create(base + "/capture"), URI.create(base + "/void")));
 	}
 
 	private HttpPaymentProvider refundProvider(String apiKey) {

@@ -47,4 +47,26 @@ public interface TransactionRepository extends JpaRepository<Transaction, UUID> 
 	List<Transaction> findDueForStatusCheck(@Param("now") Instant now, @Param("providers") Collection<String> providers,
 			@Param("limit") int limit);
 
+	@Query(value = """
+			SELECT * FROM transactions
+			WHERE status = 'AUTHORIZED' AND pending_action IS NOT NULL AND next_check_at <= :now
+			  AND provider IN (:providers)
+			ORDER BY next_check_at
+			LIMIT :limit
+			FOR UPDATE SKIP LOCKED
+			""", nativeQuery = true)
+	List<Transaction> findDueActionChecks(@Param("now") Instant now, @Param("providers") Collection<String> providers,
+			@Param("limit") int limit);
+
+	@Query(value = """
+			SELECT * FROM transactions
+			WHERE status = 'AUTHORIZED' AND pending_action IS NULL AND authorization_expires_at <= :now
+			  AND (next_check_at IS NULL OR next_check_at <= :now) AND provider IN (:providers)
+			ORDER BY authorization_expires_at
+			LIMIT :limit
+			FOR UPDATE SKIP LOCKED
+			""", nativeQuery = true)
+	List<Transaction> findExpiredAuthorizations(@Param("now") Instant now,
+			@Param("providers") Collection<String> providers, @Param("limit") int limit);
+
 }

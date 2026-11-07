@@ -45,6 +45,9 @@ payment:
       webhook-secret: ${PAYMENT_PROVIDER_HTTP_WEBHOOK_SECRET:}
       status-url: ${PAYMENT_PROVIDER_HTTP_STATUS_URL:}
       refund-url: ${PAYMENT_PROVIDER_HTTP_REFUND_URL:}
+      authorize-url: ${PAYMENT_PROVIDER_HTTP_AUTHORIZE_URL:}
+      capture-url: ${PAYMENT_PROVIDER_HTTP_CAPTURE_URL:}
+      void-url: ${PAYMENT_PROVIDER_HTTP_VOID_URL:}
   reconciliation:
     enabled: ${PAYMENT_RECONCILIATION_ENABLED:true}
     interval: ${PAYMENT_RECONCILIATION_INTERVAL:1m}

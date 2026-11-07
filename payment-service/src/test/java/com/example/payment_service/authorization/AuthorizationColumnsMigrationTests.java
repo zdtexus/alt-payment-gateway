@@ -154,9 +154,11 @@ class AuthorizationColumnsMigrationTests {
 		jdbcTemplate.update("""
 				INSERT INTO transactions (id, merchant_id, amount, currency, payment_method, status, provider,
 				                          capture_method, authorized_amount, authorization_expires_at, pending_action,
-				                          pending_capture_amount, action_idempotency_key, action_request_hash)
-				VALUES (?, ?, 49.90, 'EUR', 'CARD', ?, 'simulated', 'MANUAL', 49.90, now(), ?, ?::numeric, ?, ?)
-				""", UUID.randomUUID(), DEMO_MERCHANT_ID, status, action, pendingAmount, key, hash);
+				                          pending_capture_amount, action_idempotency_key, action_request_hash,
+				                          action_requested_at)
+				VALUES (?, ?, 49.90, 'EUR', 'CARD', ?, 'simulated', 'MANUAL', 49.90, now(), ?, ?::numeric, ?, ?,
+				        CASE WHEN ?::text IS NULL THEN NULL ELSE now() END)
+				""", UUID.randomUUID(), DEMO_MERCHANT_ID, status, action, pendingAmount, key, hash, action);
 	}
 
 	private static void assertViolates(String constraint, Runnable insert) {

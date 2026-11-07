@@ -76,7 +76,8 @@ class HttpPaymentProviderPropertiesTests {
 
 		assertThat(properties).hasToString("HttpPaymentProviderProperties[url=https://pay.example.com/charge, "
 				+ "apiKey=***, connectTimeout=PT2S, readTimeout=PT10S, webhookSecret=***, "
-				+ "statusUrl=https://pay.example.com/status, refundUrl=https://pay.example.com/refund]");
+				+ "statusUrl=https://pay.example.com/status, refundUrl=https://pay.example.com/refund, "
+				+ "authorizeUrl=null, captureUrl=null, voidUrl=null]");
 		assertThat(properties.toString()).doesNotContain("provider-api-key").doesNotContain("webhook-secret-123456");
 	}
 
@@ -87,7 +88,46 @@ class HttpPaymentProviderPropertiesTests {
 				null, null, null);
 
 		assertThat(properties).hasToString("HttpPaymentProviderProperties[url=https://pay.example.com/charge, "
-				+ "apiKey=null, connectTimeout=PT2S, readTimeout=PT10S, webhookSecret=null, statusUrl=null, refundUrl=null]");
+				+ "apiKey=null, connectTimeout=PT2S, readTimeout=PT10S, webhookSecret=null, statusUrl=null, refundUrl=null, "
+				+ "authorizeUrl=null, captureUrl=null, voidUrl=null]");
+	}
+
+	@Test
+	void manualCaptureUrlsAreSetThroughTheirEnvironmentVariables() {
+		contextRunner.withInitializer(new ConfigDataApplicationContextInitializer())
+			.withInitializer((context) -> context.getEnvironment()
+				.getPropertySources()
+				.addFirst(new SystemEnvironmentPropertySource("test-systemEnvironment",
+						Map.of("PAYMENT_PROVIDER_HTTP_URL", "https://pay.example.com/charge",
+								"PAYMENT_PROVIDER_HTTP_AUTHORIZE_URL", "https://pay.example.com/authorize",
+								"PAYMENT_PROVIDER_HTTP_CAPTURE_URL", "https://pay.example.com/capture",
+								"PAYMENT_PROVIDER_HTTP_VOID_URL", "https://pay.example.com/void"))))
+			.run((context) -> {
+				HttpPaymentProviderProperties properties = context.getBean(HttpPaymentProviderProperties.class);
+				assertThat(properties.authorizeUrl()).isEqualTo(URI.create("https://pay.example.com/authorize"));
+				assertThat(properties.captureUrl()).isEqualTo(URI.create("https://pay.example.com/capture"));
+				assertThat(properties.voidUrl()).isEqualTo(URI.create("https://pay.example.com/void"));
+				assertThat(context.getBean(HttpPaymentProvider.class).supportsManualCapture()).isTrue();
+			});
+		contextRunner.withInitializer(new ConfigDataApplicationContextInitializer())
+			.withPropertyValues("payment.provider.http.url=https://pay.example.com/charge")
+			.run((context) -> assertThat(context.getBean(HttpPaymentProvider.class).supportsManualCapture()).isFalse());
+	}
+
+	@Test
+	void manualCaptureUrlsMustBeSetTogether() {
+		contextRunner
+			.withPropertyValues("payment.provider.http.url=https://pay.example.com/charge",
+					"payment.provider.http.authorize-url=https://pay.example.com/authorize",
+					"payment.provider.http.capture-url=https://pay.example.com/capture")
+			.run((context) -> assertThat(context).hasFailed()
+				.getFailure()
+				.hasStackTraceContaining("authorize-url, capture-url and void-url must be set together"));
+		contextRunner
+			.withPropertyValues("payment.provider.http.url=https://pay.example.com/charge",
+					"payment.provider.http.authorize-url=", "payment.provider.http.capture-url=",
+					"payment.provider.http.void-url=")
+			.run((context) -> assertThat(context.getBean(HttpPaymentProviderProperties.class).authorizeUrl()).isNull());
 	}
 
 	@Test

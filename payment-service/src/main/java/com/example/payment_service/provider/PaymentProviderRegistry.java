@@ -54,6 +54,27 @@ public class PaymentProviderRegistry {
 			.filter(AuthorizingProvider::supportsManualCapture);
 	}
 
+	public Map<String, AuthorizingProvider> authorizingProviders() {
+		Map<String, AuthorizingProvider> authorizing = new TreeMap<>();
+		providers.forEach((name, provider) -> {
+			if (provider instanceof AuthorizingProvider candidate && candidate.supportsManualCapture()) {
+				authorizing.put(name, candidate);
+			}
+		});
+		return authorizing;
+	}
+
+	public Map<String, AuthorizationStatusCheckingProvider> authorizationStatusCheckingProviders() {
+		Map<String, AuthorizationStatusCheckingProvider> checking = new TreeMap<>();
+		providers.forEach((name, provider) -> {
+			if (provider instanceof AuthorizationStatusCheckingProvider candidate && candidate.checksStatus()
+					&& candidate.supportsManualCapture()) {
+				checking.put(name, candidate);
+			}
+		});
+		return checking;
+	}
+
 	public Map<String, StatusCheckingProvider> statusCheckingProviders() {
 		Map<String, StatusCheckingProvider> checking = new TreeMap<>();
 		providers.forEach((name, provider) -> {

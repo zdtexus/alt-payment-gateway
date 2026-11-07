@@ -98,6 +98,61 @@ class PaymentProviderRegistryTests {
 		assertThat(registry.findAuthorizingProvider("unknown")).isEmpty();
 	}
 
+	@Test
+	void listsAuthorizingProvidersAndThoseThatCanCheckAuthorizations() {
+		AuthorizationProvider plainAuthorizing = new AuthorizationProvider("plain-authorizing", true);
+		CheckingAuthorizationProvider checking = new CheckingAuthorizationProvider("checking", true, true);
+		CheckingAuthorizationProvider withoutStatus = new CheckingAuthorizationProvider("without-status", false, true);
+		CheckingAuthorizationProvider withoutCapture = new CheckingAuthorizationProvider("without-capture", true, false);
+
+		PaymentProviderRegistry registry = new PaymentProviderRegistry(List.of(new NamedProvider("plain"),
+				new AuthorizationProvider("switched-off", false), plainAuthorizing, checking, withoutStatus,
+				withoutCapture));
+
+		assertThat(registry.authorizingProviders()).containsOnlyKeys("plain-authorizing", "checking", "without-status");
+		assertThat(registry.authorizationStatusCheckingProviders()).containsOnlyKeys("checking");
+	}
+
+	record CheckingAuthorizationProvider(String name, boolean checksStatus, boolean supportsManualCapture)
+			implements PaymentProvider, AuthorizationStatusCheckingProvider {
+
+		@Override
+		public ProviderResult process(ProviderRequest request) {
+			return ProviderResult.approved();
+		}
+
+		@Override
+		public ProviderResult checkStatus(ProviderStatusRequest request) {
+			return ProviderResult.approved();
+		}
+
+		@Override
+		public AuthorizationResult authorize(ProviderRequest request) {
+			return AuthorizationResult.approved(null, java.time.Instant.now());
+		}
+
+		@Override
+		public ProviderResult capture(CaptureRequest request) {
+			return ProviderResult.approved();
+		}
+
+		@Override
+		public ProviderResult voidAuthorization(VoidRequest request) {
+			return ProviderResult.approved();
+		}
+
+		@Override
+		public AuthorizationResult checkAuthorizationStatus(ProviderStatusRequest request) {
+			return AuthorizationResult.approved(null, java.time.Instant.now());
+		}
+
+		@Override
+		public ProviderResult checkActionStatus(ActionStatusRequest request) {
+			return ProviderResult.approved();
+		}
+
+	}
+
 	record AuthorizationProvider(String name, boolean supportsManualCapture)
 			implements PaymentProvider, AuthorizingProvider {
 

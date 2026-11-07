@@ -5,6 +5,7 @@ import java.net.http.HttpClient;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
+import java.time.Instant;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -28,11 +29,12 @@ import org.springframework.web.util.UriComponentsBuilder;
 
 import com.example.payment_service.error.InvalidWebhookException;
 import com.example.payment_service.error.InvalidWebhookSignatureException;
+import com.example.payment_service.entity.PendingAction;
 
 @Component
 @ConditionalOnProperty(name = "payment.provider.http.url")
-public class HttpPaymentProvider
-		implements PaymentProvider, WebhookProvider, RefundStatusCheckingProvider, RefundingProvider {
+public class HttpPaymentProvider implements PaymentProvider, WebhookProvider, RefundStatusCheckingProvider,
+		RefundingProvider, AuthorizationStatusCheckingProvider {
 
 	public static final String NAME = "http";
 
@@ -48,6 +50,12 @@ public class HttpPaymentProvider
 
 	private final URI refundUrl;
 
+	private final URI authorizeUrl;
+
+	private final URI captureUrl;
+
+	private final URI voidUrl;
+
 	public HttpPaymentProvider(HttpPaymentProviderProperties properties) {
 		JdkClientHttpRequestFactory requestFactory = new JdkClientHttpRequestFactory(httpClient(properties));
 		requestFactory.setReadTimeout(properties.readTimeout());
@@ -61,6 +69,9 @@ public class HttpPaymentProvider
 		this.webhookSecret = StringUtils.hasText(properties.webhookSecret()) ? properties.webhookSecret() : null;
 		this.statusUrl = properties.statusUrl();
 		this.refundUrl = properties.refundUrl();
+		this.authorizeUrl = properties.authorizeUrl();
+		this.captureUrl = properties.captureUrl();
+		this.voidUrl = properties.voidUrl();
 	}
 
 	static HttpClient httpClient(HttpPaymentProviderProperties properties) {
@@ -167,6 +178,87 @@ public class HttpPaymentProvider
 	}
 
 	@Override
+	public boolean supportsManualCapture() {
+		return authorizeUrl != null && captureUrl != null && voidUrl != null;
+	}
+
+	@Override
+	public AuthorizationResult authorize(ProviderRequest request) {
+		Map<String, Object> body = new LinkedHashMap<>();
+		body.put("paymentId", request.paymentId());
+		body.put("method", request.method());
+		body.put("currency", request.currency());
+		body.put("amount", request.amount());
+		return post(authorizeUrl, request.paymentId().toString(), body, "authorization").toAuthorization();
+	}
+
+	@Override
+	public ProviderResult capture(CaptureRequest request) {
+		Map<String, Object> body = new LinkedHashMap<>();
+		body.put("paymentId", request.paymentId());
+		body.put("authorizationReference", request.authorizationReference());
+		body.put("currency", request.currency());
+		body.put("amount", request.amount());
+		return post(captureUrl, request.paymentId() + ":capture", body, "capture").toResult();
+	}
+
+	@Override
+	public ProviderResult voidAuthorization(VoidRequest request) {
+		Map<String, Object> body = new LinkedHashMap<>();
+		body.put("paymentId", request.paymentId());
+		body.put("authorizationReference", request.authorizationReference());
+		return post(voidUrl, request.paymentId() + ":void", body, "void").toResult();
+	}
+
+	@Override
+	public AuthorizationResult checkAuthorizationStatus(ProviderStatusRequest request) {
+		return statusOf(request.paymentId(), request.providerReference(), "authorization").toAuthorization();
+	}
+
+	@Override
+	public ProviderResult checkActionStatus(ActionStatusRequest request) {
+		String type = (request.action() == PendingAction.CAPTURE) ? "capture" : "void";
+		return statusOf(request.paymentId(), request.authorizationReference(), type).toResult();
+	}
+
+	private ProviderAnswer post(URI url, String idempotencyKey, Map<String, Object> body, String what) {
+		if (!supportsManualCapture()) {
+			throw new IllegalStateException("Payment provider http has no authorize, capture and void URLs");
+		}
+		ProviderAnswer answer = restClient.post()
+			.uri(url)
+			.contentType(MediaType.APPLICATION_JSON)
+			.header("Idempotency-Key", idempotencyKey)
+			.body(body)
+			.retrieve()
+			.body(ProviderAnswer.class);
+		if (answer == null) {
+			throw new IllegalStateException("Payment provider http answered the " + what + " without a status");
+		}
+		return answer;
+	}
+
+	private ProviderAnswer statusOf(UUID paymentId, String reference, String type) {
+		if (!checksStatus()) {
+			throw new IllegalStateException("Payment provider http has no status URL");
+		}
+		UriComponentsBuilder uri = UriComponentsBuilder.fromUri(statusUrl).queryParam("paymentId", paymentId);
+		if (StringUtils.hasText(reference)) {
+			uri.queryParam("reference", reference);
+		}
+		uri.queryParam("type", type);
+		ProviderAnswer answer = restClient.get()
+			.uri(uri.encode().build().toUri())
+			.accept(MediaType.APPLICATION_JSON)
+			.retrieve()
+			.body(ProviderAnswer.class);
+		if (answer == null) {
+			throw new IllegalStateException("Payment provider http answered the " + type + " status query without a status");
+		}
+		return answer;
+	}
+
+	@Override
 	public boolean acceptsWebhooks() {
 		return webhookSecret != null;
 	}
@@ -191,15 +283,19 @@ public class HttpPaymentProvider
 			throw new InvalidWebhookException("Webhook body is empty");
 		}
 		try {
-			ProviderResult result = new ProviderAnswer(webhook.status(), webhook.reference(), webhook.reason())
+			ProviderResult result = new ProviderAnswer(webhook.status(), webhook.reference(), webhook.reason(), null)
 				.toResult();
-			if (webhook.type() == null || "payment".equals(webhook.type())) {
+			if (webhook.type() == null) {
 				return new ProviderWebhook(webhook.paymentId(), result);
 			}
-			if ("refund".equals(webhook.type())) {
-				return ProviderWebhook.refund(webhook.refundId(), result);
-			}
-			throw new InvalidWebhookException("Unknown webhook type '" + webhook.type() + "'", null);
+			return switch (webhook.type()) {
+				case "payment" -> new ProviderWebhook(webhook.paymentId(), result);
+				case "refund" -> ProviderWebhook.refund(webhook.refundId(), result);
+				case "authorization" -> ProviderWebhook.authorization(webhook.paymentId(), result, webhook.expiresAt());
+				case "capture" -> ProviderWebhook.capture(webhook.paymentId(), result);
+				case "void" -> ProviderWebhook.voided(webhook.paymentId(), result);
+				default -> throw new InvalidWebhookException("Unknown webhook type '" + webhook.type() + "'", null);
+			};
 		}
 		catch (IllegalArgumentException | IllegalStateException ex) {
 			throw new InvalidWebhookException(ex.getMessage(), ex);
@@ -217,7 +313,12 @@ public class HttpPaymentProvider
 		}
 	}
 
-	record ProviderAnswer(String status, String reference, String reason) {
+	record ProviderAnswer(String status, String reference, String reason, Instant expiresAt) {
+
+		AuthorizationResult toAuthorization() {
+			ProviderResult result = toResult();
+			return new AuthorizationResult(result, (result instanceof ProviderResult.Declined) ? null : expiresAt);
+		}
 
 		ProviderResult toResult() {
 			if (status == null) {
@@ -234,7 +335,8 @@ public class HttpPaymentProvider
 
 	}
 
-	record WebhookBody(String type, UUID paymentId, UUID refundId, String status, String reference, String reason) {
+	record WebhookBody(String type, UUID paymentId, UUID refundId, String status, String reference, String reason,
+			Instant expiresAt) {
 	}
 
 }

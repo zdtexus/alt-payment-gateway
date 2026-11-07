@@ -182,17 +182,70 @@ public class PaymentService {
 			log.warn("Payment {} was already {} when its provider answered the authorization; the answer is ignored",
 					paymentId, transaction.getStatus());
 		}
-		else if (authorization.result() instanceof ProviderResult.Approved(String reference)) {
+		else {
+			authorize(transaction, authorization);
+		}
+		return new PaymentOutcome(PaymentResponse.from(transaction, PaymentResponse.NOTHING_REFUNDED), false);
+	}
+
+	private void authorize(Transaction transaction, AuthorizationResult authorization) {
+		if (authorization.result() instanceof ProviderResult.Approved(String reference)) {
 			transaction.setStatus(TransactionStatus.AUTHORIZED);
 			transaction.setProviderReference(reference);
 			transaction.setAuthorizedAmount(transaction.getAmount());
 			transaction.setAuthorizationExpiresAt(authorization.expiresAt().truncatedTo(ChronoUnit.MICROS));
 			transaction.setNextCheckAt(null);
+			transaction.setCheckAttempts(0);
 		}
 		else {
 			recordResult(transaction, authorization.result());
 		}
-		return new PaymentOutcome(PaymentResponse.from(transaction, PaymentResponse.NOTHING_REFUNDED), false);
+	}
+
+	public TransactionStatus settleAuthorizationFromStatusCheck(UUID paymentId, AuthorizationResult authorization) {
+		return transactionTemplate.execute((status) -> {
+			Transaction transaction = transactionRepository.findLockedById(paymentId).orElseThrow();
+			if (transaction.getStatus() == TransactionStatus.PENDING
+					&& transaction.getCaptureMethod() == CaptureMethod.MANUAL) {
+				authorize(transaction, authorization);
+			}
+			else {
+				log.warn("Payment {} was already {} when its authorization status was checked; the answer is ignored",
+						paymentId, transaction.getStatus());
+			}
+			return transaction.getStatus();
+		});
+	}
+
+	public void settleAuthorizationFromWebhook(String provider, ProviderWebhook webhook) {
+		transactionTemplate.executeWithoutResult((status) -> {
+			String reference = webhook.result().reference();
+			Transaction transaction = transactionRepository
+				.findLockedByProviderAndProviderReference(provider, reference)
+				.or(() -> findUnreferencedPayment(provider, webhook.paymentId()))
+				.orElseThrow(() -> new WebhookPaymentNotFoundException(provider, reference));
+			if (transaction.getCaptureMethod() != CaptureMethod.MANUAL) {
+				log.warn("Authorization webhook from {} for payment {} ignored: the payment doesn't use manual capture",
+						provider, transaction.getId());
+			}
+			else if (transaction.getStatus() == TransactionStatus.PENDING) {
+				authorize(transaction, webhook.authorization());
+			}
+			else if (!matchesAuthorization(transaction.getStatus(), webhook.result())) {
+				log.warn("Authorization webhook from {} for payment {} reports {} but the payment is already {}; ignored",
+						provider, transaction.getId(), webhook.result().getClass().getSimpleName(),
+						transaction.getStatus());
+			}
+		});
+	}
+
+	private static boolean matchesAuthorization(TransactionStatus status, ProviderResult result) {
+		return switch (result) {
+			case ProviderResult.Approved approved -> status == TransactionStatus.AUTHORIZED
+					|| status == TransactionStatus.SUCCEEDED || status == TransactionStatus.VOIDED;
+			case ProviderResult.Declined declined -> status == TransactionStatus.DECLINED;
+			case ProviderResult.Pending pending -> true;
+		};
 	}
 
 	private PaymentOutcome applyResult(UUID paymentId, ProviderResult result) {

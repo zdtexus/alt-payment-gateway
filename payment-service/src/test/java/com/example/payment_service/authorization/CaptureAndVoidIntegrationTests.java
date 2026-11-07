@@ -365,7 +365,7 @@ class CaptureAndVoidIntegrationTests {
 		willAnswer((invocation) -> {
 			jdbcTemplate.update("""
 					UPDATE transactions SET status = 'VOIDED', pending_action = NULL, pending_capture_amount = NULL,
-					       processed_at = now() WHERE id = ?
+					       action_requested_at = NULL, next_check_at = NULL, processed_at = now() WHERE id = ?
 					""", id);
 			return ProviderResult.approved("sim_c_1");
 		}).given(paymentProvider).capture(any());

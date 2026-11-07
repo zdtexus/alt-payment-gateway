@@ -82,6 +82,7 @@ class AuthorizationMappingTests {
 		payment.setPendingCaptureAmount(new BigDecimal("30.00"));
 		payment.setActionIdempotencyKey("ship-1");
 		payment.setActionRequestHash("b".repeat(64));
+		payment.setActionRequestedAt(Instant.now());
 		UUID id = transactionRepository.saveAndFlush(payment).getId();
 
 		assertThat(jdbcTemplate.queryForMap("""

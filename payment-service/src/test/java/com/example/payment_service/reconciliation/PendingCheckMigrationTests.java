@@ -71,12 +71,12 @@ class PendingCheckMigrationTests {
 	}
 
 	@Test
-	void onlyPendingPaymentsMayHaveANextCheck() {
+	void onlyOpenPaymentsMayHaveANextCheck() {
 		assertThatCode(() -> insert("PENDING", "now()", 0)).doesNotThrowAnyException();
 		assertThatCode(() -> insert("DECLINED", "NULL", 2)).doesNotThrowAnyException();
 		assertThatExceptionOfType(DataIntegrityViolationException.class)
 			.isThrownBy(() -> insert("SUCCEEDED", "now()", 0))
-			.withMessageContaining("chk_transactions_next_check_only_pending");
+			.withMessageContaining("chk_transactions_next_check_only_open");
 	}
 
 	@Test
