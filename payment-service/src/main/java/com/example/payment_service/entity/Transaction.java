@@ -82,6 +82,19 @@ public class Transaction {
 	@Column(name = "check_attempts", nullable = false)
 	private int checkAttempts;
 
+	@Enumerated(EnumType.STRING)
+	@Column(name = "capture_method", nullable = false, length = 16, updatable = false)
+	private CaptureMethod captureMethod = CaptureMethod.AUTOMATIC;
+
+	@Column(name = "authorized_amount", precision = 19, scale = 2)
+	private BigDecimal authorizedAmount;
+
+	@Column(name = "captured_amount", precision = 19, scale = 2)
+	private BigDecimal capturedAmount;
+
+	@Column(name = "authorization_expires_at")
+	private Instant authorizationExpiresAt;
+
 	@PrePersist
 	void onCreate() {
 		if (createdAt == null) {

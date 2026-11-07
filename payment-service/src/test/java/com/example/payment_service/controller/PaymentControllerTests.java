@@ -239,6 +239,18 @@ class PaymentControllerTests {
 	}
 
 	@ParameterizedTest
+	@ValueSource(strings = { "AUTHORIZED", "VOIDED" })
+	void listAcceptsTheAuthorizationStatuses(String status) throws Exception {
+		given(paymentService.list(same(merchant), eq(TransactionStatus.valueOf(status)), eq(0), eq(20)))
+			.willReturn(new PageResponse<>(List.of(), 0, 20, 0, 0));
+
+		mvc.perform(get("/api/v1/payments").header("X-API-Key", API_KEY).param("status", status))
+			.andExpect(status().isOk());
+
+		verify(paymentService).list(same(merchant), eq(TransactionStatus.valueOf(status)), eq(0), eq(20));
+	}
+
+	@ParameterizedTest
 	@ValueSource(strings = { "page=-1", "size=0", "size=101", "status=FOO" })
 	void listRejectsInvalidParameters(String query) throws Exception {
 		mvc.perform(get("/api/v1/payments?" + query).header("X-API-Key", API_KEY))

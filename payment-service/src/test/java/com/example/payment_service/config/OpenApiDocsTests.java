@@ -212,7 +212,8 @@ class OpenApiDocsTests {
 			.andExpect(jsonPath(created + ".PENDING.value.processedAt").value(nullValue()))
 			.andExpect(jsonPath(created + ".DECLINED.value.declineReason").value("Insufficient funds"))
 			.andExpect(jsonPath(response + ".status.description", containsString("PENDING until")))
-			.andExpect(jsonPath(response + ".status.enum", containsInAnyOrder("PENDING", "SUCCEEDED", "DECLINED")))
+			.andExpect(jsonPath(response + ".status.enum",
+					containsInAnyOrder("PENDING", "AUTHORIZED", "SUCCEEDED", "DECLINED", "VOIDED")))
 			.andExpect(jsonPath(response + ".processedAt.description", containsString("null while PENDING")))
 			.andExpect(jsonPath("$.paths['/api/v1/payments'].post.description",
 					containsString("receipt once the payment is SUCCEEDED or DECLINED")))
