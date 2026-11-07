@@ -1,18 +1,24 @@
 package com.example.payment_service.auth;
 
+import java.sql.SQLException;
 import java.util.Optional;
+import java.util.stream.Stream;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.CannotGetJdbcConnectionException;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
+import org.springframework.transaction.CannotCreateTransactionException;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -24,6 +30,7 @@ import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -93,6 +100,24 @@ class ApiKeyAuthFilterTests {
 
 		expectError(mvc.perform(get("/api/v1/test").header("X-API-Key", "suspended-key")), 403,
 				"MERCHANT_SUSPENDED", "Merchant account is suspended");
+	}
+
+	@ParameterizedTest
+	@MethodSource("databaseOutages")
+	void databaseOutageDuringKeyCheckReturns503(RuntimeException outage) throws Exception {
+		given(merchantRepository.findByApiKeyHash(ApiKeyHasher.hash("active-key"))).willThrow(outage);
+
+		ResultActions result = mvc.perform(get("/api/v1/test").header("X-API-Key", "active-key"));
+
+		expectError(result, 503, "SERVICE_UNAVAILABLE", "Database is unavailable");
+		result.andExpect(header().string("Retry-After", "5"));
+	}
+
+	static Stream<RuntimeException> databaseOutages() {
+		return Stream.of(new DataAccessResourceFailureException("Connection refused"),
+				new CannotGetJdbcConnectionException("Failed to obtain JDBC Connection",
+						new SQLException("Connection refused")),
+				new CannotCreateTransactionException("Could not open JPA EntityManager"));
 	}
 
 	@ParameterizedTest

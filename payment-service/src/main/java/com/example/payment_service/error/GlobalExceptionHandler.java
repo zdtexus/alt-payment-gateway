@@ -8,10 +8,13 @@ import org.slf4j.LoggerFactory;
 
 import org.springframework.context.MessageSourceResolvable;
 import org.springframework.core.MethodParameter;
+import org.springframework.core.NestedRuntimeException;
+import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.transaction.CannotCreateTransactionException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -24,6 +27,8 @@ import org.springframework.web.method.annotation.MethodArgumentTypeMismatchExcep
 public class GlobalExceptionHandler {
 
 	private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+
+	static final String DATABASE_RETRY_AFTER_SECONDS = "5";
 
 	@ExceptionHandler(MethodArgumentNotValidException.class)
 	ResponseEntity<ErrorResponse> handleInvalidBody(MethodArgumentNotValidException ex, HttpServletRequest request) {
@@ -118,6 +123,16 @@ public class GlobalExceptionHandler {
 	ResponseEntity<ErrorResponse> handleWebhookPaymentNotFound(WebhookPaymentNotFoundException ex,
 			HttpServletRequest request) {
 		return error(HttpStatus.NOT_FOUND, "PAYMENT_NOT_FOUND", ex.getMessage(), request);
+	}
+
+	@ExceptionHandler({ DataAccessResourceFailureException.class, CannotCreateTransactionException.class })
+	ResponseEntity<ErrorResponse> handleDatabaseUnavailable(NestedRuntimeException ex, HttpServletRequest request) {
+		log.error("Database unavailable on {} {}: {}", request.getMethod(), request.getRequestURI(),
+				ex.getMostSpecificCause().toString());
+		HttpStatus status = HttpStatus.SERVICE_UNAVAILABLE;
+		return ResponseEntity.status(status)
+			.header(HttpHeaders.RETRY_AFTER, DATABASE_RETRY_AFTER_SECONDS)
+			.body(ErrorResponse.of(status, status.name(), "Database is unavailable", request.getRequestURI()));
 	}
 
 	@ExceptionHandler(Exception.class)

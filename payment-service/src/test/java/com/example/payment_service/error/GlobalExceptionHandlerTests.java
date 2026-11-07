@@ -1,6 +1,7 @@
 package com.example.payment_service.error;
 
 import java.math.BigDecimal;
+import java.sql.SQLException;
 import java.util.UUID;
 
 import jakarta.validation.Valid;
@@ -9,17 +10,22 @@ import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.system.CapturedOutput;
 import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.context.annotation.ComponentScan;
+import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.context.annotation.FilterType;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.CannotGetJdbcConnectionException;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
+import org.springframework.transaction.CannotCreateTransactionException;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -49,6 +55,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class GlobalExceptionHandlerTests {
 
 	private static final String SECRET_DETAIL = "secret detail: password=hunter2";
+
+	private static final String DATABASE_DETAIL = "jdbc:postgresql://db:5432/payments user=payments";
 
 	private static final UUID PAYMENT_ID = UUID.fromString("7f8e2a1c-4b3d-4e5f-9a6b-1c2d3e4f5a6b");
 
@@ -193,6 +201,18 @@ class GlobalExceptionHandlerTests {
 		assertThat(output).doesNotContain("Unhandled exception").doesNotContain("Request failed");
 	}
 
+	@ParameterizedTest
+	@ValueSource(strings = { "resource", "connection", "transaction" })
+	void databaseOutageReturns503WithRetryAfter(String kind, CapturedOutput output) throws Exception {
+		ResultActions result = mvc.perform(get("/test/database/" + kind));
+
+		expectError(result, 503, "SERVICE_UNAVAILABLE", "Database is unavailable", "/test/database/" + kind);
+		result.andExpect(header().string("Retry-After", "5"))
+			.andExpect(content().string(not(containsString("jdbc:"))))
+			.andExpect(content().string(not(containsString("Exception"))));
+		assertThat(output).contains("ERROR").contains("Database unavailable on GET /test/database/" + kind);
+	}
+
 	private static void expectError(ResultActions result, int status, String error, String message, String path)
 			throws Exception {
 		result.andExpect(status().is(status))
@@ -256,6 +276,16 @@ class GlobalExceptionHandlerTests {
 		@GetMapping("/test/unexpected")
 		void unexpected() {
 			throw new IllegalStateException(SECRET_DETAIL);
+		}
+
+		@GetMapping("/test/database/{kind}")
+		void databaseDown(@PathVariable String kind) {
+			throw switch (kind) {
+				case "resource" -> new DataAccessResourceFailureException("Connection refused " + DATABASE_DETAIL);
+				case "connection" -> new CannotGetJdbcConnectionException("Failed to obtain JDBC Connection",
+						new SQLException("Connection refused " + DATABASE_DETAIL));
+				default -> new CannotCreateTransactionException("Could not open JPA EntityManager " + DATABASE_DETAIL);
+			};
 		}
 
 		@GetMapping("/test/idempotency-key-reused")

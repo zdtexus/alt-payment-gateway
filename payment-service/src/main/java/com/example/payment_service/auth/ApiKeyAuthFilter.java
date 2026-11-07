@@ -10,8 +10,10 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.http.server.PathContainer;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.CannotCreateTransactionException;
 import org.springframework.util.StringUtils;
 import org.springframework.web.filter.OncePerRequestFilter;
 import org.springframework.web.servlet.HandlerExceptionResolver;
@@ -60,7 +62,8 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
 		try {
 			merchant = authenticate(request);
 		}
-		catch (InvalidApiKeyException | MerchantSuspendedException ex) {
+		catch (InvalidApiKeyException | MerchantSuspendedException | DataAccessResourceFailureException
+				| CannotCreateTransactionException ex) {
 			exceptionResolver.resolveException(request, response, null, ex);
 			return;
 		}
