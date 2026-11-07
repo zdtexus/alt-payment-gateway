@@ -20,11 +20,12 @@ public record PaymentResponse(@Schema(example = "7f8e2a1c-4b3d-4e5f-9a6b-1c2d3e4
 		@Schema(example = "CARD") PaymentMethod paymentMethod,
 		@Schema(description = "AUTOMATIC or MANUAL, as requested", example = "AUTOMATIC") CaptureMethod captureMethod,
 		@Schema(description = "PENDING until the provider's result is known, then SUCCEEDED or DECLINED. "
+				+ "With captureMethod MANUAL: AUTHORIZED until captured (SUCCEEDED) or voided (VOIDED). "
 				+ "A final status never changes again.", example = "SUCCEEDED") TransactionStatus status,
 		@Schema(description = "Set only when the payment was declined", example = "Insufficient funds",
 				nullable = true) String declineReason,
 		@Schema(example = "2026-01-15T10:30:00Z") Instant createdAt,
-		@Schema(description = "When the payment became SUCCEEDED or DECLINED; null while PENDING",
+		@Schema(description = "When the payment became SUCCEEDED, DECLINED or VOIDED; null while PENDING or AUTHORIZED",
 				example = "2026-01-15T10:30:00.300Z", nullable = true) Instant processedAt,
 		@Schema(description = "Set only for MANUAL payments once authorized: the reserved amount must be captured "
 				+ "before this time", example = "2026-01-22T10:30:00.300Z",

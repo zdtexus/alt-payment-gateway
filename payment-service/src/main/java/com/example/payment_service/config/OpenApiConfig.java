@@ -55,6 +55,11 @@ public class OpenApiConfig {
 				it needs no API key and is authenticated by an HMAC signature. \
 				Receipts are sent when a payment becomes final.
 
+				With `"captureMethod": "MANUAL"` the provider only reserves the amount: the payment becomes \
+				`AUTHORIZED`, without a receipt, until it is captured (`POST /api/v1/payments/{id}/capture`, \
+				`SUCCEEDED` with `capturedAmount`, at most the authorized amount) or voided \
+				(`POST /api/v1/payments/{id}/void`, `VOIDED`). An authorization that expires is voided automatically.
+
 				%s
 				Errors use one format: `timestamp`, `status`, `error`, `message`, `path`. \
 				Besides the responses listed on each operation, any endpoint can return:

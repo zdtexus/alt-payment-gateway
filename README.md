@@ -14,7 +14,8 @@ The system consists of an API gateway and a payment service, backed by PostgreSQ
 - Payment providers selected per payment method: a simulated provider with a configurable success rate and latency, a fixed provider that always approves or always declines, and an HTTP provider with connect and read timeouts
 - Pending payments that a provider settles later through a signed webhook, or that are re-checked with the provider on a schedule; every payment reaches its final status exactly once
 - Full and partial refunds of succeeded payments, never more than was paid, with idempotent retries
-- Asynchronous email and SMS receipts, sent only after the payment or refund is committed as succeeded or declined
+- Manual capture: reserve the amount first (`AUTHORIZED`), then capture all or part of it or void it, exactly once; expired authorizations are voided automatically
+- Asynchronous email and SMS receipts, sent only after the payment or refund is committed as succeeded, declined or voided
 - Consistent JSON error responses
 - Versioned database schema with Flyway
 - OpenAPI documentation with Swagger UI
@@ -53,9 +54,14 @@ PaymentService.process()
 POST /api/v1/providers/{name}/webhook        signed by the provider
   └── PaymentService.settleFromWebhook()     lock row, apply result if still PENDING
         └── SUCCEEDED / DECLINED: publish PaymentProcessedEvent (same listener)
+
+POST /api/v1/payments/{id}/capture | /void   captureMethod MANUAL, status AUTHORIZED
+  └── CaptureService                         lock row, claim the action, commit;
+                                             call the provider; lock row, apply once
+        └── SUCCEEDED / VOIDED: publish PaymentProcessedEvent (same listener)
 ```
 
-The merchant receives an email receipt and an SMS for every payment that becomes final, whether it succeeded or was declined. A `PENDING` payment gets its receipt when its provider's webhook settles it. A channel is skipped when the merchant has no email address or phone number. A failed email or SMS is logged as a warning with the payment ID and does not stop the other channel. The mail server is not part of `/actuator/health`, so a mail outage does not mark the service as down. Refunds get their own receipt (`Refund <id> succeeded`, SMS `Refund 10.00 EUR succeeded`) once they become final.
+The merchant receives an email receipt and an SMS for every payment that becomes final, whether it succeeded or was declined. A `PENDING` payment gets its receipt when its provider's webhook settles it. A channel is skipped when the merchant has no email address or phone number. A failed email or SMS is logged as a warning with the payment ID and does not stop the other channel. The mail server is not part of `/actuator/health`, so a mail outage does not mark the service as down. Refunds get their own receipt (`Refund <id> succeeded`, SMS `Refund 10.00 EUR succeeded`) once they become final. An `AUTHORIZED` payment gets no receipt yet; it gets one when it is captured (with the captured amount) or voided.
 
 Email, SMS and payment providers are defined as interfaces. Implementations are selected through configuration, so a real provider can be added or swapped without changes to business code. Several payment providers can be active at once, each serving the payment methods routed to it (see [Payment providers](#payment-providers)).
 
@@ -153,8 +159,10 @@ Services are configured through environment variables. Defaults are suitable for
 | `PAYMENT_PROVIDER_ROUTES_<METHOD>` | payment-service | | Payment provider for one method, for example `PAYMENT_PROVIDER_ROUTES_CARD=simulated` (`payment.provider.routes.CARD`). Overrides the default for that method. |
 | `PAYMENT_PROVIDER_SUCCESS_RATE` | payment-service | `0.9` | Share of payments the `simulated` provider approves, from `0.0` to `1.0` (`payment.provider.simulated.success-rate`) |
 | `PAYMENT_PROVIDER_LATENCY` | payment-service | `300ms` | `simulated` provider response time (`payment.provider.simulated.latency`) |
+| `PAYMENT_PROVIDER_AUTHORIZATION_VALIDITY` | payment-service | `7d` | How long a `simulated` authorization can be captured (`payment.provider.simulated.authorization-validity`). Must be positive. |
 | `PAYMENT_PROVIDER_FIXED_OUTCOME` | payment-service | `approve` | What the `fixed` provider answers to every payment: `approve` or `decline` (`payment.provider.fixed.outcome`) |
 | `PAYMENT_PROVIDER_FIXED_DECLINE_REASON` | payment-service | `Declined by fixed provider` | Decline reason the `fixed` provider gives, at most 255 characters (`payment.provider.fixed.decline-reason`) |
+| `PAYMENT_PROVIDER_FIXED_AUTHORIZATION_VALIDITY` | payment-service | `7d` | How long a `fixed` authorization can be captured (`payment.provider.fixed.authorization-validity`). Must be positive. |
 | `PAYMENT_PROVIDER_HTTP_URL` | payment-service | | Endpoint of the `http` payment provider (`payment.provider.http.url`). The `http` provider exists only when this is set. |
 | `PAYMENT_PROVIDER_HTTP_API_KEY` | payment-service | | Sent to the `http` provider as `Authorization: Bearer <key>` when set (`payment.provider.http.api-key`) |
 | `PAYMENT_PROVIDER_HTTP_CONNECT_TIMEOUT` | payment-service | `2s` | How long the `http` provider may take to accept the connection (`payment.provider.http.connect-timeout`) |
@@ -162,6 +170,9 @@ Services are configured through environment variables. Defaults are suitable for
 | `PAYMENT_PROVIDER_HTTP_WEBHOOK_SECRET` | payment-service | | Shared secret the `http` provider signs its webhooks with, at least 16 characters (`payment.provider.http.webhook-secret`). Empty means the provider sends no webhooks (`404`). See [Provider webhooks](#provider-webhooks). |
 | `PAYMENT_PROVIDER_HTTP_STATUS_URL` | payment-service | | Endpoint the `http` provider answers status queries on (`payment.provider.http.status-url`). When set, `PENDING` payments of the `http` provider are re-checked there. See [Re-checking pending payments](#re-checking-pending-payments). |
 | `PAYMENT_PROVIDER_HTTP_REFUND_URL` | payment-service | | Endpoint the `http` provider sends refunds to (`payment.provider.http.refund-url`). Payments of the `http` provider can be refunded only when this is set; otherwise refunds get `422 REFUND_NOT_SUPPORTED`. |
+| `PAYMENT_PROVIDER_HTTP_AUTHORIZE_URL` | payment-service | | Endpoint the `http` provider authorizes `MANUAL` payments at (`payment.provider.http.authorize-url`). Set it together with the capture and void URLs, or none of them; without them `MANUAL` payments routed to `http` get `422 MANUAL_CAPTURE_NOT_SUPPORTED`. |
+| `PAYMENT_PROVIDER_HTTP_CAPTURE_URL` | payment-service | | Endpoint the `http` provider captures authorized payments at (`payment.provider.http.capture-url`). |
+| `PAYMENT_PROVIDER_HTTP_VOID_URL` | payment-service | | Endpoint the `http` provider voids authorizations at (`payment.provider.http.void-url`). |
 | `PAYMENT_RECONCILIATION_ENABLED` | payment-service | `true` | Run the job that re-checks `PENDING` payments with their providers |
 | `PAYMENT_RECONCILIATION_INTERVAL` | payment-service | `1m` | Pause between two runs of the job, and the first backoff step |
 | `PAYMENT_RECONCILIATION_MIN_AGE` | payment-service | `2m` | How long after its creation a `PENDING` payment is checked for the first time |
@@ -204,8 +215,8 @@ Each payment method is sent to one payment provider. A method uses its route (`P
 
 Available providers:
 
-- `simulated` (default) approves a share of payments (`PAYMENT_PROVIDER_SUCCESS_RATE`) after a delay (`PAYMENT_PROVIDER_LATENCY`), and returns a reference such as `sim_04347846-62b6-42f4-9d6b-917f5704225c`.
-- `fixed` gives the same answer to every payment, at once: it approves (`PAYMENT_PROVIDER_FIXED_OUTCOME=approve`, the default) or declines with `PAYMENT_PROVIDER_FIXED_DECLINE_REASON`. References look like `fix_<uuid>`. No method uses it unless routed, for example `PAYMENT_PROVIDER_ROUTES_CRYPTO=fixed` with `PAYMENT_PROVIDER_FIXED_OUTCOME=decline` to reject all crypto payments while card payments keep using `simulated`.
+- `simulated` (default) approves a share of payments (`PAYMENT_PROVIDER_SUCCESS_RATE`) after a delay (`PAYMENT_PROVIDER_LATENCY`), and returns a reference such as `sim_04347846-62b6-42f4-9d6b-917f5704225c`. With manual capture it authorizes with the same success rate (`sim_a_…` references), its authorizations can be captured for `PAYMENT_PROVIDER_AUTHORIZATION_VALIDITY` (7 days), and captures and voids always succeed.
+- `fixed` gives the same answer to every payment, at once: it approves (`PAYMENT_PROVIDER_FIXED_OUTCOME=approve`, the default) or declines with `PAYMENT_PROVIDER_FIXED_DECLINE_REASON`. References look like `fix_<uuid>`. No method uses it unless routed, for example `PAYMENT_PROVIDER_ROUTES_CRYPTO=fixed` with `PAYMENT_PROVIDER_FIXED_OUTCOME=decline` to reject all crypto payments while card payments keep using `simulated`. With manual capture it gives that answer to authorize, capture and void alike (`fix_a_`, `fix_c_`, `fix_v_`), with authorizations valid for `PAYMENT_PROVIDER_FIXED_AUTHORIZATION_VALIDITY`.
 - `http` sends each payment to an external endpoint (`PAYMENT_PROVIDER_HTTP_URL`) and is available only when that URL is set; route methods to it, for example `PAYMENT_PROVIDER_ROUTES_CARD=http`. It posts JSON with an `Idempotency-Key` header set to the payment ID, so the provider can ignore a repeated call:
 
   ```json
@@ -218,6 +229,16 @@ Available providers:
 
   With `PAYMENT_PROVIDER_HTTP_REFUND_URL` set, refunds of its payments are sent there: `POST <refund URL>` with `{"refundId": "...", "paymentId": "...", "paymentReference": "...", "currency": "EUR", "amount": 20.00}` and `Idempotency-Key: <refundId>`, the same bearer key and timeouts, and the same answer format. An answer it can't trust leaves the refund `PENDING`. A `PENDING` refund is asked about with `GET <status URL>?refundId=<id>&paymentId=<id>&reference=<reference>`.
 
+  With `PAYMENT_PROVIDER_HTTP_AUTHORIZE_URL`, `PAYMENT_PROVIDER_HTTP_CAPTURE_URL` and `PAYMENT_PROVIDER_HTTP_VOID_URL` set (all three), it supports [manual capture](#authorize-and-capture), with the same bearer key, timeouts and answer format:
+
+  | Step | Request | `Idempotency-Key` |
+  |---|---|---|
+  | Authorize | `POST <authorize URL>` `{"paymentId", "method", "currency", "amount"}` | `<paymentId>` |
+  | Capture | `POST <capture URL>` `{"paymentId", "authorizationReference", "currency", "amount"}` | `<paymentId>:capture` |
+  | Void | `POST <void URL>` `{"paymentId", "authorizationReference"}` | `<paymentId>:void` |
+
+  An approved authorization must include `"expiresAt": "2026-01-22T10:30:00Z"`; without it the answer isn't trusted and the payment stays `PENDING`. With the status URL set, open steps are asked about with `GET <status URL>?paymentId=<id>&reference=<reference>&type=authorization|capture|void` (an `authorization` answer carries `expiresAt` too).
+
 Each transaction stores the provider name and the provider's reference (see [Database](#database)). Both are internal: merchants don't see them in API responses, so providers and routes can change without affecting merchants.
 
 To add a provider:
@@ -229,6 +250,7 @@ To add a provider:
 5. If the provider confirms payments later, return `ProviderResult.pending(reference)` and also implement `WebhookProvider`: `acceptsWebhooks()` (for example only when a secret is configured) and `readWebhook(body, signature)`, which checks the provider's signature over the raw body and returns the result with its reference. Its webhooks are then accepted at `/api/v1/providers/acme/webhook`.
 6. If the provider can be asked about a payment, also implement `StatusCheckingProvider`: `checksStatus()` (for example only when a status URL is configured) and `checkStatus(request)`, which returns the current result for `request.paymentId()` and `request.providerReference()` (which may be `null`). Its `PENDING` payments are then re-checked on a schedule. Throw on anything you can't trust.
 7. If the provider can refund, also implement `RefundingProvider`: `supportsRefunds()` and `refund(request)`, which returns the result for `request.refundId()` (with `paymentId`, the payment's `paymentReference`, `currency` and `amount`), in the same way as `process`. `simulated` refunds with the same success rate and latency as its payments, and `fixed` follows its configured outcome, with `sim_r_`/`fix_r_` references. To have `PENDING` refunds re-checked, implement `RefundStatusCheckingProvider.checkRefundStatus(request)` too; refund webhooks are read by the same `readWebhook` (see [Provider webhooks](#provider-webhooks)).
+8. If the provider supports manual capture, also implement `AuthorizingProvider`: `supportsManualCapture()`, `authorize(request)` returning an `AuthorizationResult` (an approval needs its `expiresAt`), `capture(request)` and `voidAuthorization(request)` (`void` is a Java keyword). Captures and voids go to the provider that authorized the payment, by its stored name. To have pending authorizations, captures and voids re-checked, implement `AuthorizationStatusCheckingProvider` (`checkAuthorizationStatus`, `checkActionStatus`); its webhooks of types `authorization`, `capture` and `void` are read by the same `readWebhook`.
 
 ## API
 
@@ -239,10 +261,12 @@ All payment requests require the `X-API-Key` header. A merchant can only access 
 | `POST` | `/api/v1/payments` | Create and process a payment |
 | `GET` | `/api/v1/payments/{id}` | Retrieve a payment |
 | `GET` | `/api/v1/payments` | List payments, newest first. Supports `status`, `page` and `size`. |
+| `POST` | `/api/v1/payments/{id}/capture` | Capture an `AUTHORIZED` payment, in full or in part |
+| `POST` | `/api/v1/payments/{id}/void` | Void an `AUTHORIZED` payment and release the reserved amount |
 | `POST` | `/api/v1/payments/{id}/refunds` | Refund a succeeded payment, in full or in parts |
 | `GET` | `/api/v1/payments/{id}/refunds` | List a payment's refunds, oldest first |
 | `GET` | `/api/v1/payments/{id}/refunds/{refundId}` | Retrieve a refund |
-| `POST` | `/api/v1/providers/{name}/webhook` | Final result of a `PENDING` payment or refund, sent by its provider (no API key, signed) |
+| `POST` | `/api/v1/providers/{name}/webhook` | Final result of a pending payment, refund, authorization, capture or void, sent by its provider (no API key, signed) |
 
 Create a payment:
 
@@ -253,7 +277,7 @@ curl -X POST http://localhost:8080/api/v1/payments \
   -d '{"amount": 49.90, "currency": "EUR", "paymentMethod": "CARD"}'
 ```
 
-A successful request returns `201 Created` with a relative `Location` header, for example `/api/v1/payments/7f8e2a1c-4b3d-4e5f-9a6b-1c2d3e4f5a6b`. A declined payment is a regular result and is returned with status `DECLINED`, not as an error. A payment whose provider hasn't confirmed it yet is returned with status `PENDING` and `processedAt: null`; poll `GET /api/v1/payments/{id}` (or list with `status=PENDING`) for its final status (see [Payment statuses](#payment-statuses)).
+A successful request returns `201 Created` with a relative `Location` header, for example `/api/v1/payments/7f8e2a1c-4b3d-4e5f-9a6b-1c2d3e4f5a6b`. A declined payment is a regular result and is returned with status `DECLINED`, not as an error. A payment whose provider hasn't confirmed it yet is returned with status `PENDING` and `processedAt: null`; poll `GET /api/v1/payments/{id}` (or list with `status=PENDING`) for its final status (see [Payment statuses](#payment-statuses)). Add `"captureMethod": "MANUAL"` to only reserve the amount and charge it later (see [Authorize and capture](#authorize-and-capture)); without it, or with `"AUTOMATIC"`, the payment is charged at once.
 
 The full API reference is available in Swagger UI.
 
@@ -276,6 +300,48 @@ curl -X POST http://localhost:8080/api/v1/payments \
 - A request rejected with `400` or `422 PAYMENT_RULE_VIOLATION` stores nothing, so the key can be reused with a corrected body.
 - Requests without the header are processed every time.
 
+### Authorize and capture
+
+A merchant that ships goods later can reserve the amount first and charge it when the order ships:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/payments \
+  -H "X-API-Key: demo-key-123" \
+  -H "Content-Type: application/json" \
+  -d '{"amount": 49.90, "currency": "EUR", "paymentMethod": "CARD", "captureMethod": "MANUAL"}'
+```
+
+The provider authorizes the amount, and the payment is `201` with status `AUTHORIZED`, no receipt yet, and the time the reservation lasts:
+
+```json
+{"id": "7f8e2a1c-4b3d-4e5f-9a6b-1c2d3e4f5a6b", "amount": 49.90, "refundedAmount": 0.00, "currency": "EUR",
+ "paymentMethod": "CARD", "captureMethod": "MANUAL", "status": "AUTHORIZED", "declineReason": null,
+ "createdAt": "2026-01-15T10:30:00Z", "processedAt": null,
+ "authorizationExpiresAt": "2026-01-22T10:30:00.300Z", "capturedAmount": null, "pendingAction": null}
+```
+
+Then capture all of it, or part of it (the rest is released), or void it:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/payments/7f8e2a1c-4b3d-4e5f-9a6b-1c2d3e4f5a6b/capture \
+  -H "X-API-Key: demo-key-123" -H "Content-Type: application/json" -d '{"amount": 30.00}'
+
+curl -X POST http://localhost:8080/api/v1/payments/7f8e2a1c-4b3d-4e5f-9a6b-1c2d3e4f5a6b/void \
+  -H "X-API-Key: demo-key-123"
+```
+
+A capture returns `200` with status `SUCCEEDED` and `capturedAmount` (`amount` stays what was authorized); without a body it captures everything. A void returns `200` with status `VOIDED`.
+
+- **Once.** A payment is captured or voided once, never both: anything else gets `409 PAYMENT_NOT_CAPTURABLE` or `409 PAYMENT_NOT_VOIDABLE`. The row is locked while the request is claimed, so a capture and a void sent at the same time can't both win.
+- **Never more than authorized.** A capture may be at most the authorized amount; more gets `422 CAPTURE_EXCEEDS_AUTHORIZED`. The amount has at most 2 decimals.
+- **Expiry.** After `authorizationExpiresAt` a payment can't be captured any more (`409`), only voided. The background job voids expired authorizations by itself, through their provider, with the same receipt; a void the provider declines or fails is retried with the usual backoff.
+- **Unknown result.** If the provider fails, times out or answers `PENDING`, the request gets `202` and the payment stays `AUTHORIZED` with `pendingAction: "CAPTURE"` or `"VOID"`. The provider's [webhook](#provider-webhooks) or a [status check](#re-checking-pending-payments) settles it later; until then another capture or void gets `409`.
+- **Declined.** A capture or void the provider declines changes nothing: `422 CAPTURE_DECLINED` or `VOID_DECLINED` with the provider's reason, and the payment stays `AUTHORIZED`, so it can be captured or voided again, or expire. A declined authorization is a normal `DECLINED` payment.
+- **Idempotent retries.** Send an `Idempotency-Key` with a capture or void: a retry with the same key and body returns the payment as it is now with `Idempotent-Replayed: true` and calls the provider once; the same key with another amount, or on the other action, gets `422 IDEMPOTENCY_KEY_REUSED`. Keys are scoped to the payment; a declined request frees its key.
+- **Receipts.** None for the authorization; one when the payment is captured (`Payment 30.00 EUR succeeded`, with the captured amount) or voided (`Payment … voided`).
+- **Refunds** are possible only after the capture, up to `capturedAmount` (see [Refunds](#refunds)).
+- **Providers.** `simulated`, `fixed`, and `http` with its authorize, capture and void URLs support it. A `MANUAL` payment whose provider doesn't gets `422 MANUAL_CAPTURE_NOT_SUPPORTED` before anything is stored, so its idempotency key stays free.
+
 ### Refunds
 
 A `SUCCEEDED` payment can be refunded in full or in several parts:
@@ -295,8 +361,8 @@ Without a body (or with `{}`), everything that is still refundable is refunded. 
  "declineReason": null, "createdAt": "2026-01-16T09:00:00Z", "processedAt": "2026-01-16T09:00:00.300Z"}
 ```
 
-- **Only succeeded payments.** A `PENDING` or `DECLINED` payment gets `409 PAYMENT_NOT_REFUNDABLE`. A payment of a provider that can't refund gets `422 REFUND_NOT_SUPPORTED`; today `simulated` and `fixed` can, and `http` can with `PAYMENT_PROVIDER_HTTP_REFUND_URL`.
-- **Never more than was paid.** A refund may be at most the payment's amount minus its `SUCCEEDED` and `PENDING` refunds; more gets `422 REFUND_EXCEEDS_REMAINING` (`Refund 30.00 exceeds the remaining refundable amount 20.00`, or `Payment is already fully refunded`). The payment row is locked while a refund is created, so refunds sent at the same time can't add up to more either. The amount has at most 2 decimals; `reason` is optional, up to 255 characters.
+- **Only succeeded payments.** A `PENDING`, `DECLINED`, `AUTHORIZED` (capture it first) or `VOIDED` payment gets `409 PAYMENT_NOT_REFUNDABLE`. A payment of a provider that can't refund gets `422 REFUND_NOT_SUPPORTED`; today `simulated` and `fixed` can, and `http` can with `PAYMENT_PROVIDER_HTTP_REFUND_URL`.
+- **Never more than was paid.** A refund may be at most the payment's amount (for a manually captured payment, its `capturedAmount`) minus its `SUCCEEDED` and `PENDING` refunds; more gets `422 REFUND_EXCEEDS_REMAINING` (`Refund 30.00 exceeds the remaining refundable amount 20.00`, or `Payment is already fully refunded`). The payment row is locked while a refund is created, so refunds sent at the same time can't add up to more either. The amount has at most 2 decimals; `reason` is optional, up to 255 characters.
 - **The payment keeps its status.** A refunded payment stays `SUCCEEDED`; `refundedAmount` on the payment is the sum of its `SUCCEEDED` refunds (`0.00` when nothing was refunded).
 - **Refund statuses** work like payment statuses: `PENDING` while the provider's answer isn't known (it answered `PENDING`, failed or timed out), then `SUCCEEDED` or `DECLINED` (with `declineReason`) exactly once. A `PENDING` refund still counts against the remaining amount and is settled later by the provider's [webhook](#provider-webhooks) or by [re-checking](#re-checking-pending-payments). A declined refund frees its amount again.
 - **Idempotent retries** work as for payments: send an `Idempotency-Key`, and a retry with the same body returns the same refund with `Idempotent-Replayed: true` without calling the provider again; a different body gets `422 IDEMPOTENCY_KEY_REUSED`. Refund keys are separate from payment keys.
@@ -459,8 +525,10 @@ A payment is stored as `PENDING` and committed before its provider is called, th
 | `PENDING` | Stored; the provider's result isn't known yet. `processedAt` is `null`. | none yet |
 | `SUCCEEDED` | The provider approved the payment. Final. | sent |
 | `DECLINED` | The provider declined it; `declineReason` says why. Final. | sent |
+| `AUTHORIZED` | `captureMethod` `MANUAL` only: the amount is reserved until `authorizationExpiresAt`. `processedAt` is `null`. | none yet |
+| `VOIDED` | `MANUAL` only: the authorization was voided, by the merchant or because it expired; nothing was charged. Final. | sent |
 
-A refunded payment keeps `SUCCEEDED`; its refunds are a resource of their own with the same three statuses (see [Refunds](#refunds)). A payment moves from `PENDING` to `SUCCEEDED` or `DECLINED` once, either from the provider's answer to the payment request or later from the provider's [webhook](#provider-webhooks), whichever comes first; a final status never changes.
+A `MANUAL` payment moves `PENDING` → `AUTHORIZED` → `SUCCEEDED` (captured, with `capturedAmount`) or `VOIDED`, each step once (see [Authorize and capture](#authorize-and-capture)). A refunded payment keeps `SUCCEEDED`; its refunds are a resource of their own with the same three statuses (see [Refunds](#refunds)). A payment moves from `PENDING` to `SUCCEEDED` or `DECLINED` once, either from the provider's answer to the payment request or later from the provider's [webhook](#provider-webhooks), whichever comes first; a final status never changes.
 
 A payment stays `PENDING` when the provider's result is unknown: the provider answered `PENDING` (it confirms later, for example after a redirect), failed with an error, or didn't answer within its timeout. The merchant still gets `201` with status `PENDING` and the payment's `Location`. It gets no receipt yet, and is not charged again on an idempotent retry. A provider failure or timeout is logged as an error with the provider name and payment ID. The provider settles the payment through its webhook, or the service asks the provider again (see below), whichever happens first.
 
@@ -476,6 +544,8 @@ A webhook can get lost, and some providers send none. So a background job regula
 - **Logs.** Each run that checked something logs one summary, for example `Checked 8 pending payments with their providers: 1 settled, 0 still pending, 7 failed`; a failed check is one `WARN` line with the cause.
 
 `PENDING` refunds are re-checked the same way, with the same settings and backoff, through `GET <status URL>?refundId=…` (log `Checked N pending refunds with their providers: …`, alert `Refund … of payment … is still PENDING …`).
+
+For manual capture, the same job asks `http` (with its status URL) about `PENDING` authorizations (`type=authorization`) and about captures and voids whose answer is unknown (`type=capture|void`, first checked `PAYMENT_RECONCILIATION_MIN_AGE` after the request, log `Checked N pending captures and voids with their providers: …`, alert `The capture of payment … is still pending …`). It also voids expired authorizations of every provider that supports manual capture, `simulated` and `fixed` included (log `Voided N expired authorizations with their providers: …`).
 
 Payments of providers without status queries (`simulated`, `fixed`, or `http` without a status URL) are never checked; they are settled by the provider's answer or webhook. `GET /api/v1/payments?status=PENDING` lists everything still open. Set `PAYMENT_RECONCILIATION_ENABLED=false` to switch the job off.
 
@@ -499,6 +569,17 @@ Refund results use the same endpoint and signature, with `"type": "refund"` (a b
 ```
 
 The refund is found by the provider's `reference` among that provider's refunds, or, while it has no reference yet, by `refundId`. It then moves once, exactly as a payment does; no match is `404 REFUND_NOT_FOUND`, so the provider retries.
+
+Manual capture uses the same endpoint and signature with three more types:
+
+```json
+{"type": "authorization", "paymentId": "7f8e2a1c-4b3d-4e5f-9a6b-1c2d3e4f5a6b", "status": "APPROVED", "reference": "acme_a_1", "expiresAt": "2026-01-22T10:30:00Z"}
+{"type": "capture", "paymentId": "7f8e2a1c-4b3d-4e5f-9a6b-1c2d3e4f5a6b", "status": "APPROVED", "reference": "acme_c_1"}
+{"type": "void", "paymentId": "7f8e2a1c-4b3d-4e5f-9a6b-1c2d3e4f5a6b", "status": "APPROVED", "reference": "acme_v_1"}
+```
+
+- An `authorization` webhook is matched like a payment webhook and moves a `PENDING` manual payment to `AUTHORIZED` (approved, `expiresAt` required, else `400 INVALID_WEBHOOK`) or `DECLINED`.
+- A `capture` or `void` webhook needs `paymentId` (else `400`) and must come from the payment's own provider (else `404 PAYMENT_NOT_FOUND`). It applies only while that capture or void is pending, so a webhook for a capture the merchant never asked for captures nothing. A declined one leaves the payment `AUTHORIZED`.
 
 To set up webhooks for the `http` provider:
 
@@ -537,8 +618,14 @@ Errors are returned in a common format:
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | Request body that isn't JSON; the `Accept` header lists the supported types |
 | 422 | `PAYMENT_RULE_VIOLATION` | Amount or currency not allowed for the payment method |
 | 404 | `REFUND_NOT_FOUND` | No such refund of that payment; for a refund webhook, no refund of that provider matches yet |
-| 409 | `PAYMENT_NOT_REFUNDABLE` | Refund of a payment that isn't `SUCCEEDED` |
-| 422 | `REFUND_EXCEEDS_REMAINING` | Refund larger than the payment's amount minus its `SUCCEEDED` and `PENDING` refunds |
+| 409 | `PAYMENT_NOT_REFUNDABLE` | Refund of a payment that isn't `SUCCEEDED`; an `AUTHORIZED` one must be captured first |
+| 409 | `PAYMENT_NOT_CAPTURABLE` | Capture of a payment that isn't `AUTHORIZED`, whose capture or void is in progress, or whose authorization expired |
+| 409 | `PAYMENT_NOT_VOIDABLE` | Void of a payment that isn't `AUTHORIZED`, or whose capture or void is in progress |
+| 422 | `REFUND_EXCEEDS_REMAINING` | Refund larger than the payment's amount (its `capturedAmount` for manual capture) minus its `SUCCEEDED` and `PENDING` refunds |
+| 422 | `MANUAL_CAPTURE_NOT_SUPPORTED` | `"captureMethod": "MANUAL"`, or a capture or void, for a payment whose provider can't authorize |
+| 422 | `CAPTURE_EXCEEDS_AUTHORIZED` | Capture larger than the authorized amount |
+| 422 | `CAPTURE_DECLINED` | The provider declined the capture; the payment stays `AUTHORIZED` |
+| 422 | `VOID_DECLINED` | The provider declined the void; the payment stays `AUTHORIZED` |
 | 422 | `REFUND_NOT_SUPPORTED` | Refund of a payment whose provider can't refund |
 | 422 | `IDEMPOTENCY_KEY_REUSED` | `Idempotency-Key` already used with a different request body |
 | 429 | `TOO_MANY_REQUESTS` | Returned by the gateway when the API key, client IP or webhook sender is over the rate limit; see `Retry-After` |
@@ -562,7 +649,10 @@ transactions   id, merchant_id, amount, currency, payment_method, status,
                decline_reason, created_at, processed_at,
                idempotency_key, request_hash,
                provider, provider_reference,
-               next_check_at, check_attempts
+               next_check_at, check_attempts,
+               capture_method, authorized_amount, captured_amount,
+               authorization_expires_at, pending_action, pending_capture_amount,
+               action_idempotency_key, action_request_hash, action_requested_at
 refunds        id, transaction_id, merchant_id, amount, status, reason,
                provider_reference, decline_reason, idempotency_key, request_hash,
                created_at, processed_at, next_check_at, check_attempts
@@ -571,6 +661,8 @@ refunds        id, transaction_id, merchant_id, amount, status, reason,
 Each transaction records which payment provider handled it (`provider`, for example `simulated`) and that provider's own transaction ID (`provider_reference`, empty if the provider returns none). Payments made before these columns existed are recorded as `simulated`. An index on (`provider`, `provider_reference`) serves the webhook lookup.
 
 `next_check_at` is when a `PENDING` payment is next checked with its provider and `check_attempts` how often it has been checked (see [Re-checking pending payments](#re-checking-pending-payments)). A final payment has no `next_check_at`; the database enforces this with a check constraint, and a partial index over `PENDING` rows lets the job find due payments quickly.
+
+Manual capture is enforced by check constraints too: `capture_method` is `AUTOMATIC` (existing payments, and the default) or `MANUAL`; an `AUTOMATIC` payment has no authorization columns; the captured amount is above 0 and at most the authorized one; a `pending_action` (`CAPTURE` or `VOID`) exists only on an `AUTHORIZED` payment, always with `action_requested_at`, and a pending capture's amount is within the authorization; an action's idempotency key is stored with its request hash. `next_check_at` may be set only on `PENDING` and `AUTHORIZED` payments (pending captures and voids, and the retry of an expiry void). Partial indexes find authorizations by expiry and pending actions by due time.
 
 A refund belongs to one payment and that payment's merchant: the foreign key covers (`transaction_id`, `merchant_id`) together, so a refund can't be stored for another merchant's payment. The amount must be greater than 0, an idempotency key is unique per merchant and always stored with its request hash, and the same `next_check_at` rule and partial indexes as for payments apply.
 
@@ -618,10 +710,10 @@ alt-payment-gateway/
 │       ├── event/            PaymentProcessedEvent, RefundProcessedEvent
 │       ├── notification/     Receipt listener, email and SMS senders
 │       ├── provider/         Payment provider interface, registry, per-method router, simulated, fixed and HTTP providers, webhook, status and refund contracts
-│       ├── reconciliation/   Scheduled re-checking of PENDING payments and refunds
+│       ├── reconciliation/   Scheduled re-checking of pending payments, refunds, captures and voids; expiry of authorizations
 │       ├── repository/       Spring Data repositories
 │       ├── rules/            Per-method currency and amount rules
-│       └── service/          Payment processing, refunds and merchant administration
+│       └── service/          Payment processing, capture and void, refunds and merchant administration
 ├── docker-compose.yml
 ├── docker-compose.scale.yml  Override for two gateway instances on ports 8080-8081
 ├── .env.example

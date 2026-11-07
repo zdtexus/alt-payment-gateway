@@ -39,7 +39,62 @@ class OpenApiDocsTests {
 			.andExpect(jsonPath(webhook + ".security", empty()))
 			.andExpect(jsonPath(webhook + ".tags", contains("Provider webhooks")))
 			.andExpect(jsonPath(webhook + ".parameters[*].name", hasItem("X-Webhook-Signature")))
-			.andExpect(jsonPath(webhook + ".responses.keys()", containsInAnyOrder("204", "400", "401", "404")));
+			.andExpect(jsonPath(webhook + ".responses.keys()", containsInAnyOrder("204", "400", "401", "404")))
+			.andExpect(jsonPath(webhook + ".requestBody.content['application/json'].examples.keys()",
+					containsInAnyOrder("payment", "refund", "authorization", "capture", "void")))
+			.andExpect(jsonPath(webhook + ".requestBody.content['application/json'].examples.authorization.value.expiresAt")
+				.value("2026-01-22T10:30:00Z"));
+	}
+
+	@Test
+	void documentsManualCapture() throws Exception {
+		String create = "$.paths['/api/v1/payments'].post";
+		mvc.perform(get("/v3/api-docs"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.info.description", containsString("With `\"captureMethod\": \"MANUAL\"`")))
+			.andExpect(jsonPath("$.info.description", containsString("An authorization that expires is voided automatically.")))
+			.andExpect(jsonPath(create + ".description", containsString("the payment is AUTHORIZED (no receipt)")))
+			.andExpect(jsonPath(create
+					+ ".responses['422'].content['application/json'].examples.MANUAL_CAPTURE_NOT_SUPPORTED.value.message")
+				.value("Manual capture is not supported for KVIK payments"))
+			.andExpect(jsonPath("$.components.schemas.CreatePaymentRequest.properties.captureMethod.enum",
+					containsInAnyOrder("AUTOMATIC", "MANUAL")))
+			.andExpect(jsonPath("$.components.schemas.CreatePaymentRequest.required", not(hasItem("captureMethod"))));
+	}
+
+	@Test
+	void documentsCaptureAndVoidEndpoints() throws Exception {
+		String capture = "$.paths['/api/v1/payments/{paymentId}/capture'].post";
+		String voidPath = "$.paths['/api/v1/payments/{paymentId}/void'].post";
+		mvc.perform(get("/v3/api-docs"))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath(capture + ".summary").value("Capture an authorized payment"))
+			.andExpect(jsonPath(capture + ".responses.keys()",
+					containsInAnyOrder("200", "202", "400", "401", "403", "404", "409", "422")))
+			.andExpect(jsonPath(capture + ".responses['200'].content['application/json'].examples.SUCCEEDED.value.capturedAmount")
+				.value(30.00))
+			.andExpect(jsonPath(capture
+					+ ".responses['202'].content['application/json'].examples.PENDING_CAPTURE.value.pendingAction")
+				.value("CAPTURE"))
+			.andExpect(jsonPath(capture + ".responses['409']..error").value(hasItem("PAYMENT_NOT_CAPTURABLE")))
+			.andExpect(jsonPath(capture
+					+ ".responses['422'].content['application/json'].examples.CAPTURE_EXCEEDS_AUTHORIZED.value.message")
+				.value("Capture 60.00 exceeds the authorized amount 49.90"))
+			.andExpect(jsonPath(capture + ".responses['422'].content['application/json'].examples.CAPTURE_DECLINED").exists())
+			.andExpect(jsonPath(capture + ".requestBody").exists())
+			.andExpect(jsonPath(capture + ".requestBody.required").doesNotExist())
+			.andExpect(jsonPath(capture + ".parameters[?(@.name == 'Idempotency-Key')].schema.maxLength").value(255))
+			.andExpect(jsonPath(voidPath + ".summary").value("Void an authorized payment"))
+			.andExpect(jsonPath(voidPath + ".responses.keys()",
+					containsInAnyOrder("200", "202", "400", "401", "403", "404", "409", "422")))
+			.andExpect(jsonPath(voidPath + ".responses['200'].content['application/json'].examples.VOIDED.value.status")
+				.value("VOIDED"))
+			.andExpect(jsonPath(voidPath + ".responses['409']..error").value(hasItem("PAYMENT_NOT_VOIDABLE")))
+			.andExpect(jsonPath(voidPath + ".responses['422']..error").value(hasItem("VOID_DECLINED")))
+			.andExpect(jsonPath(voidPath + ".requestBody").doesNotExist())
+			.andExpect(jsonPath("$.components.schemas.CapturePaymentRequest.properties.amount.example").value(30.00))
+			.andExpect(jsonPath("$.components.schemas.PaymentResponse.properties.pendingAction.enum",
+					containsInAnyOrder("CAPTURE", "VOID")));
 	}
 
 	@Test
@@ -208,7 +263,13 @@ class OpenApiDocsTests {
 		String response = "$.components.schemas.PaymentResponse.properties";
 		mvc.perform(get("/v3/api-docs"))
 			.andExpect(status().isOk())
-			.andExpect(jsonPath(created + ".keys()", containsInAnyOrder("SUCCEEDED", "DECLINED", "PENDING")))
+			.andExpect(jsonPath(created + ".keys()", containsInAnyOrder("SUCCEEDED", "DECLINED", "PENDING", "AUTHORIZED")))
+			.andExpect(jsonPath(created + ".AUTHORIZED.value.status").value("AUTHORIZED"))
+			.andExpect(jsonPath(created + ".AUTHORIZED.value.captureMethod").value("MANUAL"))
+			.andExpect(jsonPath(created + ".AUTHORIZED.value.authorizationExpiresAt").isNotEmpty())
+			.andExpect(jsonPath(created + ".SUCCEEDED.value.captureMethod").value("AUTOMATIC"))
+			.andExpect(jsonPath(response + ".status.description", containsString("AUTHORIZED until captured")))
+			.andExpect(jsonPath(response + ".processedAt.description", containsString("PENDING or AUTHORIZED")))
 			.andExpect(jsonPath(created + ".PENDING.value.status").value("PENDING"))
 			.andExpect(jsonPath(created + ".PENDING.value.processedAt").value(nullValue()))
 			.andExpect(jsonPath(created + ".DECLINED.value.declineReason").value("Insufficient funds"))

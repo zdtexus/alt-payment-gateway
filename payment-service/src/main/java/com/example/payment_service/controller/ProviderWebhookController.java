@@ -29,7 +29,9 @@ import com.example.payment_service.service.RefundService;
 
 @RestController
 @RequestMapping("/api/v1/providers")
-@Tag(name = "Provider webhooks", description = "Final results that payment providers report after a payment was left PENDING")
+@Tag(name = "Provider webhooks",
+		description = "Final results that payment providers report after a payment, refund, authorization, capture or "
+				+ "void was left pending")
 public class ProviderWebhookController {
 
 	public static final String SIGNATURE_HEADER = "X-Webhook-Signature";
@@ -81,7 +83,16 @@ public class ProviderWebhookController {
 									 "reference": "acme_123"}"""),
 							@ExampleObject(name = "refund", value = """
 									{"type": "refund", "refundId": "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
-									 "status": "APPROVED", "reference": "acme_r_7"}""") })) @RequestBody byte[] body) {
+									 "status": "APPROVED", "reference": "acme_r_7"}"""),
+							@ExampleObject(name = "authorization", value = """
+									{"type": "authorization", "paymentId": "7f8e2a1c-4b3d-4e5f-9a6b-1c2d3e4f5a6b",
+									 "status": "APPROVED", "reference": "acme_a_1", "expiresAt": "2026-01-22T10:30:00Z"}"""),
+							@ExampleObject(name = "capture", value = """
+									{"type": "capture", "paymentId": "7f8e2a1c-4b3d-4e5f-9a6b-1c2d3e4f5a6b",
+									 "status": "APPROVED", "reference": "acme_c_1"}"""),
+							@ExampleObject(name = "void", value = """
+									{"type": "void", "paymentId": "7f8e2a1c-4b3d-4e5f-9a6b-1c2d3e4f5a6b",
+									 "status": "APPROVED", "reference": "acme_v_1"}""") })) @RequestBody byte[] body) {
 		WebhookProvider provider = providerRegistry.findWebhookProvider(name)
 			.orElseThrow(() -> new WebhookNotAcceptedException(name));
 		ProviderWebhook webhook = provider.readWebhook(body, signature);

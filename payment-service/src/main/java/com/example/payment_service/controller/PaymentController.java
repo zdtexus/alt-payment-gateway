@@ -69,25 +69,36 @@ public class PaymentController {
 					+ "the payment is created (201) with status PENDING; the provider settles it later through its "
 					+ "webhook, and GET shows the final status. "
 					+ "The merchant gets an email and SMS receipt once the payment is SUCCEEDED or DECLINED. "
+					+ "With captureMethod MANUAL the amount is only reserved: the payment is AUTHORIZED (no receipt) "
+					+ "until it is captured or voided, or its authorization expires. "
 					+ "Send an Idempotency-Key to make retries safe: a retry with the same key and body returns "
 					+ "the payment as stored (PENDING included) without charging again, and a retry with a different "
 					+ "body is rejected.")
 	@ApiResponse(responseCode = "201",
-			description = "Payment created (SUCCEEDED, DECLINED, or PENDING while the result is unknown), or replayed",
+			description = "Payment created (SUCCEEDED, DECLINED, AUTHORIZED for MANUAL capture, or PENDING while the "
+					+ "result is unknown), or replayed",
 			content = @Content(mediaType = "application/json", schema = @Schema(implementation = PaymentResponse.class),
 					examples = {
 							@ExampleObject(name = "SUCCEEDED", value = """
 									{"id": "7f8e2a1c-4b3d-4e5f-9a6b-1c2d3e4f5a6b", "amount": 49.90, "refundedAmount": 0.00, "currency": "EUR",
-									 "paymentMethod": "CARD", "status": "SUCCEEDED", "declineReason": null,
-									 "createdAt": "2026-01-15T10:30:00Z", "processedAt": "2026-01-15T10:30:00.300Z"}"""),
+									 "paymentMethod": "CARD", "captureMethod": "AUTOMATIC", "status": "SUCCEEDED", "declineReason": null,
+									 "createdAt": "2026-01-15T10:30:00Z", "processedAt": "2026-01-15T10:30:00.300Z",
+									 "authorizationExpiresAt": null, "capturedAmount": null, "pendingAction": null}"""),
 							@ExampleObject(name = "DECLINED", value = """
 									{"id": "7f8e2a1c-4b3d-4e5f-9a6b-1c2d3e4f5a6b", "amount": 49.90, "refundedAmount": 0.00, "currency": "EUR",
-									 "paymentMethod": "CARD", "status": "DECLINED", "declineReason": "Insufficient funds",
-									 "createdAt": "2026-01-15T10:30:00Z", "processedAt": "2026-01-15T10:30:00.300Z"}"""),
+									 "paymentMethod": "CARD", "captureMethod": "AUTOMATIC", "status": "DECLINED", "declineReason": "Insufficient funds",
+									 "createdAt": "2026-01-15T10:30:00Z", "processedAt": "2026-01-15T10:30:00.300Z",
+									 "authorizationExpiresAt": null, "capturedAmount": null, "pendingAction": null}"""),
 							@ExampleObject(name = "PENDING", value = """
 									{"id": "7f8e2a1c-4b3d-4e5f-9a6b-1c2d3e4f5a6b", "amount": 49.90, "refundedAmount": 0.00, "currency": "EUR",
-									 "paymentMethod": "CARD", "status": "PENDING", "declineReason": null,
-									 "createdAt": "2026-01-15T10:30:00Z", "processedAt": null}""") }),
+									 "paymentMethod": "CARD", "captureMethod": "AUTOMATIC", "status": "PENDING", "declineReason": null,
+									 "createdAt": "2026-01-15T10:30:00Z", "processedAt": null,
+									 "authorizationExpiresAt": null, "capturedAmount": null, "pendingAction": null}"""),
+							@ExampleObject(name = "AUTHORIZED", value = """
+									{"id": "7f8e2a1c-4b3d-4e5f-9a6b-1c2d3e4f5a6b", "amount": 49.90, "refundedAmount": 0.00, "currency": "EUR",
+									 "paymentMethod": "CARD", "captureMethod": "MANUAL", "status": "AUTHORIZED", "declineReason": null,
+									 "createdAt": "2026-01-15T10:30:00Z", "processedAt": null,
+									 "authorizationExpiresAt": "2026-01-22T10:30:00.300Z", "capturedAmount": null, "pendingAction": null}""") }),
 			headers = {
 					@Header(name = "Location", description = "Relative URL of the created payment",
 							schema = @Schema(example = "/api/v1/payments/7f8e2a1c-4b3d-4e5f-9a6b-1c2d3e4f5a6b")),
@@ -100,12 +111,15 @@ public class PaymentController {
 					{"timestamp": "2026-01-15T10:30:00Z", "status": 400, "error": "VALIDATION_FAILED",
 					 "message": "amount: must be greater than 0", "path": "/api/v1/payments"}""")))
 	@ApiResponse(responseCode = "422",
-			description = "Amount or currency not allowed for the payment method, "
-					+ "or the Idempotency-Key was already used with a different body",
+			description = "Amount or currency not allowed for the payment method, MANUAL capture not supported "
+					+ "by its provider, or the Idempotency-Key was already used with a different body",
 			content = @Content(schema = @Schema(implementation = ErrorResponse.class), examples = {
 					@ExampleObject(name = "PAYMENT_RULE_VIOLATION", value = """
 							{"timestamp": "2026-01-15T10:30:00Z", "status": 422, "error": "PAYMENT_RULE_VIOLATION",
 							 "message": "Amount 600.00 exceeds BONUS limit 500.00", "path": "/api/v1/payments"}"""),
+					@ExampleObject(name = "MANUAL_CAPTURE_NOT_SUPPORTED", value = """
+							{"timestamp": "2026-01-15T10:30:00Z", "status": 422, "error": "MANUAL_CAPTURE_NOT_SUPPORTED",
+							 "message": "Manual capture is not supported for KVIK payments", "path": "/api/v1/payments"}"""),
 					@ExampleObject(name = "IDEMPOTENCY_KEY_REUSED", value = """
 							{"timestamp": "2026-01-15T10:30:00Z", "status": 422, "error": "IDEMPOTENCY_KEY_REUSED",
 							 "message": "Idempotency key was already used with a different request",
