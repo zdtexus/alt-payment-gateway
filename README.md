@@ -10,7 +10,7 @@ The system consists of an API gateway and a payment service, backed by PostgreSQ
 - API key authentication with strict per-merchant data isolation
 - Admin API to create merchants, suspend them and rotate their API keys
 - Safe retries with the `Idempotency-Key` header, so a retried payment is never charged twice
-- Multiple payment methods with per-method currency and amount rules
+- Multiple payment methods with per-method currency and amount rules, set in configuration
 - Payment providers selected per payment method: a simulated provider with a configurable success rate and latency, a fixed provider that always approves or always declines, and an HTTP provider with connect and read timeouts
 - Pending payments that a provider settles later through a signed webhook; every payment reaches its final status exactly once
 - Asynchronous email and SMS receipts, sent only after the payment is committed as succeeded or declined
@@ -145,6 +145,9 @@ Services are configured through environment variables. Defaults are suitable for
 | `MAIL_HOST` | payment-service | `localhost` | SMTP host |
 | `MAIL_PORT` | payment-service | `1025` | SMTP port |
 | `MAIL_TIMEOUT_MS` | payment-service | `5000` | SMTP connect, read and write timeout in milliseconds |
+| `PAYMENT_RULES_<METHOD>_CURRENCIES` | payment-service | see [Payment methods](#payment-methods) | Currencies one method accepts, as comma-separated ISO 4217 codes, for example `PAYMENT_RULES_CARD_CURRENCIES=EUR,USD` (`payment.rules.CARD.currencies`) |
+| `PAYMENT_RULES_<METHOD>_MIN_AMOUNT` | payment-service | see [Payment methods](#payment-methods) | Smallest amount for one method, greater than 0, at most 2 decimals (`payment.rules.<METHOD>.min-amount`) |
+| `PAYMENT_RULES_<METHOD>_MAX_AMOUNT` | payment-service | see [Payment methods](#payment-methods) | Largest amount for one method, at least the minimum, at most 2 decimals (`payment.rules.<METHOD>.max-amount`) |
 | `PAYMENT_PROVIDER_DEFAULT` | payment-service | `simulated` | Payment provider for methods without their own route. Empty means no default; then every method needs a route. |
 | `PAYMENT_PROVIDER_ROUTES_<METHOD>` | payment-service | | Payment provider for one method, for example `PAYMENT_PROVIDER_ROUTES_CARD=simulated` (`payment.provider.routes.CARD`). Overrides the default for that method. |
 | `PAYMENT_PROVIDER_SUCCESS_RATE` | payment-service | `0.9` | Share of payments the `simulated` provider approves, from `0.0` to `1.0` (`payment.provider.simulated.success-rate`) |
@@ -373,12 +376,34 @@ docker compose -f docker-compose.yml -f docker-compose.scale.yml up -d --scale a
 
 ### Payment methods
 
+Each payment method has a rule: the currencies it accepts and the smallest and largest amount, both inclusive. These are the defaults:
+
 | Method | Currencies | Minimum | Maximum |
 |---|---|---|---|
-| `CARD` | EUR, USD, PLN, UAH | 0.50 | 10,000 |
-| `BONUS` | EUR | 0.01 | 500 |
-| `CRYPTO` | EUR, USD | 1.00 | 5,000 |
-| `KVIK` | EUR, PLN | 0.50 | 2,000 |
+| `CARD` | EUR, USD, PLN, UAH | 0.50 | 10,000.00 |
+| `BONUS` | EUR | 0.01 | 500.00 |
+| `CRYPTO` | EUR, USD | 1.00 | 5,000.00 |
+| `KVIK` | EUR, PLN | 0.50 | 2,000.00 |
+
+A payment outside its method's rule is rejected with `422 PAYMENT_RULE_VIOLATION` before any provider is called, for example `Amount 600.00 exceeds BONUS limit 500.00` or `Currency USD is not supported for BONUS`.
+
+The rules are configuration, not code, so changing one needs a restart but no release. Set only the values you want to change; the others keep their defaults. For example, in `.env`:
+
+```bash
+PAYMENT_RULES_BONUS_MAX_AMOUNT=100.00
+PAYMENT_RULES_CARD_CURRENCIES=EUR,USD,PLN
+```
+
+then `docker compose up -d payment-service`. The names are `PAYMENT_RULES_<METHOD>_CURRENCIES`, `_MIN_AMOUNT` and `_MAX_AMOUNT` (`payment.rules.<METHOD>.currencies`, `min-amount` and `max-amount` in `application.yml`).
+
+- **Checked at startup.** Currencies must be ISO 4217 codes in upper case. Amounts must be greater than 0 with at most 2 decimals, and the minimum can't be above the maximum. An invalid rule stops `payment-service`, and one message lists every problem with its setting, for example:
+
+  ```text
+  Invalid payment rules: payment.rules.CARD.currencies (PAYMENT_RULES_CARD_CURRENCIES) must contain ISO 4217 codes like EUR, was 'eur'; payment.rules.BONUS.max-amount (PAYMENT_RULES_BONUS_MAX_AMOUNT) must have at most 2 decimals, was 50.005
+  ```
+
+- **Visible.** The active rules are logged at startup (`Payment rules: CARD=EUR/PLN/UAH/USD 0.50-10000.00, BONUS=EUR 0.01-500.00, …`), and the API description in Swagger UI shows the same table.
+- **Not retroactive.** A rule applies to new payments only; stored payments are never re-checked.
 
 ### Payment statuses
 
