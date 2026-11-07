@@ -32,6 +32,7 @@ import com.example.payment_service.provider.PaymentProviderRouter;
 import com.example.payment_service.provider.ProviderRequest;
 import com.example.payment_service.provider.ProviderResult;
 import com.example.payment_service.provider.ProviderWebhook;
+import com.example.payment_service.reconciliation.ReconciliationProperties;
 import com.example.payment_service.repository.TransactionRepository;
 import com.example.payment_service.rules.PaymentRuleValidator;
 
@@ -52,14 +53,17 @@ public class PaymentService {
 
 	private final TransactionTemplate transactionTemplate;
 
+	private final ReconciliationProperties reconciliation;
+
 	public PaymentService(TransactionRepository transactionRepository, PaymentRuleValidator ruleValidator,
 			PaymentProviderRouter providerRouter, ApplicationEventPublisher eventPublisher,
-			TransactionTemplate transactionTemplate) {
+			TransactionTemplate transactionTemplate, ReconciliationProperties reconciliation) {
 		this.transactionRepository = transactionRepository;
 		this.ruleValidator = ruleValidator;
 		this.providerRouter = providerRouter;
 		this.eventPublisher = eventPublisher;
 		this.transactionTemplate = transactionTemplate;
+		this.reconciliation = reconciliation;
 	}
 
 	public PaymentResponse process(Merchant merchant, CreatePaymentRequest request) {
@@ -111,6 +115,9 @@ public class PaymentService {
 		transaction.setCurrency(request.currency());
 		transaction.setPaymentMethod(request.paymentMethod());
 		transaction.setStatus(TransactionStatus.PENDING);
+		Instant createdAt = Instant.now().truncatedTo(ChronoUnit.MICROS);
+		transaction.setCreatedAt(createdAt);
+		transaction.setNextCheckAt(createdAt.plus(reconciliation.minAge()));
 		PaymentProvider provider = providerRouter.providerFor(request.paymentMethod());
 		transaction.setProvider(provider.name());
 		return new PendingPayment(transactionRepository.saveAndFlush(transaction), provider);
@@ -196,6 +203,7 @@ public class PaymentService {
 			}
 		}
 		transaction.setProcessedAt(Instant.now().truncatedTo(ChronoUnit.MICROS));
+		transaction.setNextCheckAt(null);
 		eventPublisher.publishEvent(PaymentProcessedEvent.from(transaction));
 	}
 

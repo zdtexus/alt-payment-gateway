@@ -41,6 +41,8 @@ payment:
       connect-timeout: ${PAYMENT_PROVIDER_HTTP_CONNECT_TIMEOUT:2s}
       read-timeout: ${PAYMENT_PROVIDER_HTTP_READ_TIMEOUT:10s}
       webhook-secret: ${PAYMENT_PROVIDER_HTTP_WEBHOOK_SECRET:}
+  reconciliation:
+    min-age: ${PAYMENT_RECONCILIATION_MIN_AGE:2m}
   rules:
     CARD:
       currencies: ${PAYMENT_RULES_CARD_CURRENCIES:EUR,USD,PLN,UAH}

@@ -76,6 +76,12 @@ public class Transaction {
 	@Column(name = "provider_reference")
 	private String providerReference;
 
+	@Column(name = "next_check_at")
+	private Instant nextCheckAt;
+
+	@Column(name = "check_attempts", nullable = false)
+	private int checkAttempts;
+
 	@PrePersist
 	void onCreate() {
 		if (createdAt == null) {

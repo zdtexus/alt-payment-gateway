@@ -1,6 +1,7 @@
 package com.example.payment_service.service;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
@@ -38,6 +39,7 @@ import com.example.payment_service.provider.PaymentProviderRouter;
 import com.example.payment_service.provider.ProviderRequest;
 import com.example.payment_service.provider.ProviderResult;
 import com.example.payment_service.provider.ProviderWebhook;
+import com.example.payment_service.reconciliation.ReconciliationProperties;
 import com.example.payment_service.repository.TransactionRepository;
 import com.example.payment_service.rules.PaymentRuleValidator;
 
@@ -75,14 +77,19 @@ class PaymentServiceTests {
 
 	private final PlatformTransactionManager transactionManager = mock();
 
+	private static final Duration MIN_AGE = Duration.ofMinutes(2);
+
 	private final PaymentService paymentService = new PaymentService(transactionRepository, ruleValidator,
-			providerRouter, eventPublisher, new TransactionTemplate(transactionManager));
+			providerRouter, eventPublisher, new TransactionTemplate(transactionManager),
+			new ReconciliationProperties(MIN_AGE));
 
 	private final Merchant merchant = new Merchant();
 
 	private final AtomicReference<TransactionStatus> statusWhenSaved = new AtomicReference<>();
 
 	private final AtomicReference<String> providerWhenSaved = new AtomicReference<>();
+
+	private final AtomicReference<Instant> nextCheckWhenSaved = new AtomicReference<>();
 
 	@BeforeEach
 	void assignIdOnSave() {
@@ -92,6 +99,7 @@ class PaymentServiceTests {
 			Transaction transaction = invocation.getArgument(0);
 			statusWhenSaved.set(transaction.getStatus());
 			providerWhenSaved.set(transaction.getProvider());
+			nextCheckWhenSaved.set(transaction.getNextCheckAt());
 			transaction.setId(PAYMENT_ID);
 			given(transactionRepository.findLockedById(PAYMENT_ID)).willReturn(Optional.of(transaction));
 			return transaction;
@@ -322,6 +330,66 @@ class PaymentServiceTests {
 		assertThat(response.status()).isEqualTo(TransactionStatus.DECLINED);
 		assertThat(savedTransaction().getProviderReference()).isNull();
 		verifyNoInteractions(eventPublisher);
+	}
+
+	@Test
+	void newPendingPaymentIsDueForItsFirstCheckAfterTheMinimumAge() {
+		given(paymentProvider.process(any())).willReturn(ProviderResult.pending("ref-1"));
+
+		paymentService.process(merchant, REQUEST);
+
+		Transaction saved = savedTransaction();
+		assertThat(saved.getCreatedAt()).isNotNull();
+		assertThat(nextCheckWhenSaved.get()).isEqualTo(saved.getCreatedAt().plus(MIN_AGE));
+		assertThat(saved.getNextCheckAt()).isEqualTo(saved.getCreatedAt().plus(MIN_AGE));
+		assertThat(saved.getCheckAttempts()).isZero();
+	}
+
+	@Test
+	void finalProviderAnswerClearsTheNextCheck() {
+		given(paymentProvider.process(any())).willReturn(ProviderResult.approved());
+
+		paymentService.process(merchant, REQUEST);
+
+		assertThat(nextCheckWhenSaved.get()).isNotNull();
+		assertThat(savedTransaction().getNextCheckAt()).isNull();
+	}
+
+	@Test
+	void declinedProviderAnswerClearsTheNextCheck() {
+		given(paymentProvider.process(any())).willReturn(ProviderResult.declined("Insufficient funds"));
+
+		paymentService.process(merchant, REQUEST);
+
+		assertThat(savedTransaction().getNextCheckAt()).isNull();
+	}
+
+	@Test
+	void providerFailureKeepsTheNextCheck() {
+		given(paymentProvider.process(any())).willThrow(new IllegalStateException("provider down"));
+
+		paymentService.process(merchant, REQUEST);
+
+		Transaction saved = savedTransaction();
+		assertThat(saved.getNextCheckAt()).isEqualTo(saved.getCreatedAt().plus(MIN_AGE));
+	}
+
+	@Test
+	void finalWebhookClearsTheNextCheckAndPendingWebhookKeepsIt() {
+		Instant due = Instant.parse("2026-01-15T10:32:00Z");
+		Transaction settled = pendingTransaction("ref-1");
+		settled.setNextCheckAt(due);
+		Transaction stillPending = pendingTransaction(null);
+		stillPending.setNextCheckAt(due);
+		given(transactionRepository.findLockedByProviderAndProviderReference("http", "ref-1"))
+			.willReturn(Optional.of(settled));
+		given(transactionRepository.findLockedById(PAYMENT_ID)).willReturn(Optional.of(stillPending));
+
+		paymentService.settleFromWebhook("http", new ProviderWebhook(null, ProviderResult.declined("Expired", "ref-1")));
+		paymentService.settleFromWebhook("http", new ProviderWebhook(PAYMENT_ID, ProviderResult.pending("ref-2")));
+
+		assertThat(settled.getNextCheckAt()).isNull();
+		assertThat(stillPending.getNextCheckAt()).isEqualTo(due);
 	}
 
 	@Test
